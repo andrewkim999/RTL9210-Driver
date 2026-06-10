@@ -19,6 +19,10 @@ struct rtl9210_dev {
 	struct usb_host_endpoint *data_out;	// EP2 OUT 0x02
 	struct usb_host_endpoint *status;	// EP3 IN  0x83
 	struct usb_host_endpoint *cmd;		// EP4 OUT 0x04
+	
+	struct urb *data_urb;
+	struct urb *status_urb;
+	struct urb *cmd_urb;
 };
 
 /* endpoint parsing function */
@@ -58,7 +62,7 @@ static int rtl9210_find_endpoints(struct rtl9210_dev *dev) {
 	{} at the end marks the end of the array. 
 */
 static const struct usb_device_id rtl9210_table[] = {
-	{USB_DEVICE(RTL_VENDOR_ID, RTL_PRODUCT_ID)},	// vendor ID = 0bda, product ID = 9210
+	{USB_DEVICE(RTL_VENDOR_ID, RTL_PRODUCT_ID)},
 	{}
 };
 
@@ -112,6 +116,30 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 		kfree(dev);
 		return ret;
 	}
+	
+	/* allocate URBs */
+	dev->data_urb = usb_alloc_urb(0, GFP_KERNEL);
+	if (!dev->data_urb) {
+		kfree(dev);
+		return -ENOMEM;
+	}
+
+	dev->status_urb = usb_alloc_urb(0, GFP_KERNEL);
+	if (!dev->status_urb) {
+		usb_free_urb(dev->data_urb);
+		kfree(dev);
+		return -ENOMEM;
+	}
+	
+	dev->cmd_urb = usb_alloc_urb(0, GFP_KERNEL);
+	if (!dev->cmd_urb) {
+		usb_free_urb(dev->data_urb);
+		usb_free_urb(dev->status_urb);
+		kfree(dev);
+		return -ENOMEM;
+	}
+	
+	printk(KERN_INFO "rtl9210: URBs allocated\n");
 
 	/**
  	 * usb_set_intfdata() - associate driver-specific data with an interface
@@ -134,6 +162,10 @@ static void rtl9210_disconnect(struct usb_interface *intf) {
 	struct rtl9210_dev *dev = usb_get_intfdata(intf);
 	
 	usb_set_intfdata(intf, NULL);
+
+	usb_free_urb(dev->data_urb);
+	usb_free_urb(dev->status_urb);
+	usb_free_urb(dev->cmd_urb);
 	kfree(dev);
 	
 	printk(KERN_INFO "rtl9210: device disconnected\n");
