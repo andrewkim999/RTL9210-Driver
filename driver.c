@@ -33,19 +33,14 @@ static int rtl9210_find_endpoints(struct rtl9210_dev *dev) {
 	for (int i = 0; i < alt->desc.bNumEndpoints; i++) {
 		ep = &alt->endpoint[i].desc;
 
-		if (usb_endpoint_is_bulk_in(ep) && ep->bEndpointAddress == 0x81) {
+		if (usb_endpoint_is_bulk_in(ep) && ep->bEndpointAddress == 0x81)
 			dev->data_in = &alt->endpoint[i];
-			printk(KERN_INFO "rtl9210: found data-in endpoint\n");
-		} else if (usb_endpoint_is_bulk_out(ep) && ep->bEndpointAddress == 0x02) {
+		else if (usb_endpoint_is_bulk_out(ep) && ep->bEndpointAddress == 0x02)
 			dev->data_out = &alt->endpoint[i];
-			printk(KERN_INFO "rtl9210: found data-out endpoint\n");
-		} else if (usb_endpoint_is_bulk_in(ep) && ep->bEndpointAddress == 0x83) {
+		else if (usb_endpoint_is_bulk_in(ep) && ep->bEndpointAddress == 0x83)
 			dev->status = &alt->endpoint[i];
-			printk(KERN_INFO "rtl9210: found status endpoint\n");
-		} else if (usb_endpoint_is_bulk_out(ep) && ep->bEndpointAddress == 0x04) {
+		else if (usb_endpoint_is_bulk_out(ep) && ep->bEndpointAddress == 0x04)
 			dev->cmd = &alt->endpoint[i];
-			printk(KERN_INFO "rtl9210: found command endpoint\n");
-		} 
 	}
 
 	if (!dev->data_in || !dev->data_out || !dev->status || !dev->cmd) {
@@ -116,7 +111,8 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 		kfree(dev);
 		return ret;
 	}
-	
+	printk(KERN_INFO "rtl9210: found all 4 endpoints\n");
+
 	/* allocate URBs */
 	dev->data_urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (!dev->data_urb) {
