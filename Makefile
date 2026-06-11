@@ -1,6 +1,6 @@
 KDIR := /home/andrewkim999/test/wsl2-kernel
 
-obj-m += driver.o
+obj-m += sys/driver.o
 
 all:
 	make -C $(KDIR) M=$(PWD) modules
