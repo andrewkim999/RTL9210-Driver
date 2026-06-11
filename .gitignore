@@ -5,4 +5,5 @@
 *.mod.o
 *.order
 *.symvers
+*.log
 .tmp_versions/
