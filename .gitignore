@@ -6,4 +6,5 @@
 *.order
 *.symvers
 *.log
+*.cmd
 .tmp_versions/
