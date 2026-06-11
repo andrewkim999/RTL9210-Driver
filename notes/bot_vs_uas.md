@@ -8,4 +8,4 @@ UAS (USB Attached SCSI)
 -----------------------
 UAS sends commands in parallel, unlike BOT. Up to 32 commands can be sent simultaneously. How does it do this? It's due to UAS using 4 endpoints (command, data IN, data OUT, status) instead of 2. While one command is being sent to the host, the host can be sending data for another command. This improves performance significantly if there are many different operations queued (eg. read after write after read). Only compatible with USB 3.0 and up.
 
-In our device, the default protocol selected is BOT, and this can be seen at the bInterfaceProtocol under the Interface Descriptor. We change the protocol from BOT to UAS immediately in our driver to improve performance and reduce latency.
+In our device, the default protocol selected is BOT, and this can be seen at bInterfaceProtocol under the Interface Descriptor. We change the protocol from BOT to UAS immediately in our prove function to improve performance and reduce latency.
