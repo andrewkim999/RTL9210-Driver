@@ -25,3 +25,14 @@ Endpoint Descriptors (UAS Mode)
 * Data-out (0x04) Endpoint Address: 0x02 EP 2 OUT
 * Status   (0x02) Endpoint Address: 0x83 EP 3 IN
 * Command  (0x01) Endpoint Address: 0x04 EP 4 OUT
+
+
+Software
+========
+
+Linux Distribution
+------------------
+Distributor ID: Ubuntu
+Description:    Ubuntu 24.04.1 LTS
+Release:        24.04
+Codename:       noble
