@@ -32,7 +32,12 @@ Software
 
 Linux Distribution
 ------------------
-Distributor ID: Ubuntu
-Description:    Ubuntu 24.04.1 LTS
-Release:        24.04
-Codename:       noble
+* Distributor ID: Ubuntu
+* Description:    Ubuntu 24.04.1 LTS
+* Release:        24.04
+* Codename:       noble
+
+Kernel
+------
+* Source: WSL2-Linux-Kernel on Github
+* Link:   https://github.com/microsoft/wsl2-linux-kernel
