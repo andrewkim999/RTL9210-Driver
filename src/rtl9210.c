@@ -1,5 +1,6 @@
 #include <linux/module.h>
 #include <linux/usb.h>
+#include <linux/usb/uas.h>
 
 #define RTL_VENDOR_ID	0x0bda
 #define RTL_PRODUCT_ID	0x9210
@@ -54,37 +55,36 @@ static int rtl9210_find_endpoints(struct rtl9210_dev *dev) {
 
 
 static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
-	struct command_iu *command_buf;
+	struct command_iu *cmd_buf;
 	__u8 *data_buf;
-	struct status_iu *status_buf;
+	struct sense_iu *status_buf;
 
-	command_buf = kzalloc(sizeof(struct command_iu), GFP_KERNEL);
-	if (!command_buf)
+	cmd_buf = kzalloc(sizeof(struct command_iu), GFP_KERNEL);
+	if (!cmd_buf)
 		return -ENOMEM;
 
 	data_buf = kzalloc(sizeof(INQUIRY_REPLY_LEN), GFP_KERNEL);
 	if (!data_buf) {
-		kfree(command_buf);
+		kfree(cmd_buf);
 		return -ENOMEM;
 	}
 
-	status_buf = kzalloc(sizeof (struct status_buf), GFP_KERNEL);
+	status_buf = kzalloc(sizeof(struct sense_iu), GFP_KERNEL);
 	if (!status_buf) {
-		kfree(command_buf);
+		kfree(cmd_buf);
 		kfree(data_buf);
 		return -ENOMEM;
 	}
 	
-	command_buf = {
-		.iu_id = IU_ID_COMMAND,
-		.tag = cpu_to_be16(1),
-		.prio_attr = UAS_SIMPLE_TAG,	// executes in order, no special priority
-		.len = 0,
-		.lun = 0,
-		.cdb[0] = 0x12,	// INQUIRY opcode
-		.cdb[4] = 96
-	};
+	cmd_buf->iu_id = IU_ID_COMMAND;
+	cmd_buf->tag = cpu_to_be16(1);
+	cmd_buf->prio_attr = UAS_SIMPLE_TAG;	// executes in order, no special priority
+	cmd_buf->len = 0;
+	cmd_buf->cdb[0] = 0x12;	// INQUIRY opcode
+	cmd_buf->cdb[4] = 96;
 
+	return 0;
+}
 
 /*	Array of vendor/product ID pairs my driver claims to support.
 	USB_DEVICE() is a macro that expands to fill in the struct fields.
