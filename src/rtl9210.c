@@ -5,6 +5,7 @@
 #define RTL_PRODUCT_ID	0x9210
 #define USB_PR_BULK		0x50
 #define USB_PR_UAS		0x62
+#define INQUIRY_REPLY_LEN 96
 
 /* stores per device state */
 struct rtl9210_dev {
@@ -50,6 +51,39 @@ static int rtl9210_find_endpoints(struct rtl9210_dev *dev) {
 
 	return 0;
 }
+
+
+static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
+	struct command_iu *command_buf;
+	__u8 *data_buf;
+	struct status_iu *status_buf;
+
+	command_buf = kzalloc(sizeof(struct command_iu), GFP_KERNEL);
+	if (!command_buf)
+		return -ENOMEM;
+
+	data_buf = kzalloc(sizeof(INQUIRY_REPLY_LEN), GFP_KERNEL);
+	if (!data_buf) {
+		kfree(command_buf);
+		return -ENOMEM;
+	}
+
+	status_buf = kzalloc(sizeof (struct status_buf), GFP_KERNEL);
+	if (!status_buf) {
+		kfree(command_buf);
+		kfree(data_buf);
+		return -ENOMEM;
+	}
+	
+	command_buf = {
+		.iu_id = IU_ID_COMMAND,
+		.tag = cpu_to_be16(1),
+		.prio_attr = UAS_SIMPLE_TAG,	// executes in order, no special priority
+		.len = 0,
+		.lun = 0,
+		.cdb[0] = 0x12,	// INQUIRY opcode
+		.cdb[4] = 96
+	};
 
 
 /*	Array of vendor/product ID pairs my driver claims to support.
@@ -99,7 +133,7 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 				protocol == USB_PR_UAS ? "UAS" : "Bulk-Only");
 	}
 
-	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
+	dev = kzalloc(sizeof(struct rtl9210_dev), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;
 
@@ -136,6 +170,8 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	}
 	
 	printk(KERN_INFO "rtl9210: URBs allocated\n");
+
+	rtl9210_send_inquiry(dev);
 
 	/**
  	 * usb_set_intfdata() - associate driver-specific data with an interface
