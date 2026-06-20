@@ -53,6 +53,17 @@ static int rtl9210_find_endpoints(struct rtl9210_dev *dev) {
 	return 0;
 }
 
+static void rtl9210_inquiry_data_complete(struct urb *urb) {
+	__u8 *buf = urb->transfer;
+}
+
+static void rtl9210_inquiry_status_complete(struct urb *urb) {
+	struct sense_iu *iu = urb->transfer_buffer;
+}
+
+static void rtl9210_inquiry_cmd_complete(struct urb *urb) {
+	struct command_iu *iu = urb->transfer_buffer;
+}
 
 static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	struct command_iu *cmd_buf;
@@ -81,7 +92,12 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	cmd_buf->prio_attr = UAS_SIMPLE_TAG;	// executes in order, no special priority
 	cmd_buf->len = 0;
 	cmd_buf->cdb[0] = 0x12;	// INQUIRY opcode
-	cmd_buf->cdb[4] = 96;
+	cmd_buf->cdb[4] = INQUIRY_REPLY_LENGTH;
+
+	usb_fill_bulk_urb(dev->cmd_urb, dev->udev,
+			usb_sndbulkpipe(dev->udev, 0x04),
+			cmd_iu, sizeof(*cmd_iu),
+			rtl9210_cmd)
 
 	return 0;
 }
