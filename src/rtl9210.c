@@ -63,9 +63,9 @@ static void rtl9210_inquiry_data_complete(struct urb *urb) {
 	}
 
 	printk(KERN_INFO "rtl9210: INQUIRY response received\n");
-	printk(KERN_INFO "rtl9210: vendor:   %.8s\n", &buf[8]);
+	printk(KERN_INFO "rtl9210: vendor:   %.8s\n",  &buf[8]);
 	printk(KERN_INFO "rtl9210: product:  %.16s\n", &buf[16]);
-	printk(KERN_INFO "rtl9210: revision: %.4s\n", &buf[32]);
+	printk(KERN_INFO "rtl9210: revision: %.4s\n",  &buf[32]);
 
 	kfree(buf);
 }
@@ -109,7 +109,7 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	if (!cmd_buf)
 		return -ENOMEM;
 
-	data_buf = kzalloc(sizeof(INQUIRY_REPLY_LEN), GFP_KERNEL);
+	data_buf = kzalloc(INQUIRY_REPLY_LEN, GFP_KERNEL);
 	if (!data_buf) {
 		kfree(cmd_buf);
 		return -ENOMEM;
@@ -122,17 +122,25 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 		return -ENOMEM;
 	}
 	
-	cmd_buf->iu_id = IU_ID_COMMAND;
-	cmd_buf->tag = cpu_to_be16(1);
+	cmd_buf->iu_id     = IU_ID_COMMAND;
+	cmd_buf->tag       = cpu_to_be16(1);
 	cmd_buf->prio_attr = UAS_SIMPLE_TAG;	// executes in order, no special priority
-	cmd_buf->len = 0;
-	cmd_buf->cdb[0] = 0x12;	// INQUIRY opcode
-	cmd_buf->cdb[4] = INQUIRY_REPLY_LENGTH;
+	cmd_buf->len       = 0;
+	int_to_scsilun(0, &cmd_iu->lun);	// LUN 0
 
+	cmd_buf->cdb[0] = 0x12;	// INQUIRY opcode
+	cmd_buf->cdb[1] = 0x00;	// EVPD = 0
+	cmd_buf->cdb[2] = 0x00;	// page code = 0
+	cmd_buf->cdb[3] = 0x00;	// reserved
+	cmd_buf->cdb[4] = INQUIRY_REPLY_LENGTH;	// allocation length
+	cmd_buf->cdb[5] = 0x00;	// control
+
+
+	/* fill command URB -> EP4 OUT 0x04 */
 	usb_fill_bulk_urb(dev->cmd_urb, dev->udev,
 			usb_sndbulkpipe(dev->udev, 0x04),
 			cmd_iu, sizeof(*cmd_iu),
-			rtl9210_cmd)
+			rtl9210_cmd_complete, dev);
 
 	return 0;
 }
