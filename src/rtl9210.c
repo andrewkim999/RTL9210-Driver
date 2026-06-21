@@ -54,15 +54,50 @@ static int rtl9210_find_endpoints(struct rtl9210_dev *dev) {
 }
 
 static void rtl9210_inquiry_data_complete(struct urb *urb) {
-	__u8 *buf = urb->transfer;
+	__u8 *buf = urb->transfer_buffer;
+
+	if (urb->status) {
+		printk(KERN_ERR "rtl9210: data URB failed: %d\n", urb->status);
+		kfree(buf);
+		return;
+	}
+
+	printk(KERN_INFO "rtl9210: INQUIRY response received\n");
+	printk(KERN_INFO "rtl9210: vendor:   %.8s\n", &buf[8]);
+	printk(KERN_INFO "rtl9210: product:  %.16s\n", &buf[16]);
+	printk(KERN_INFO "rtl9210: revision: %.4s\n", &buf[32]);
+
+	kfree(buf);
 }
 
 static void rtl9210_inquiry_status_complete(struct urb *urb) {
 	struct sense_iu *iu = urb->transfer_buffer;
+
+
+	if (urb->status) {
+		printk(KERN_ERR "rtl9210: status URB failed: %d\n", urb->status);
+		kfree(buf);
+		return;
+	}
+
+	printk(KERN_INFO "rtl9210: status iu_id=0x%02x status=0x%02x\n", 
+			iu->iu_id, iu->status);
+
+	if (iu->status != 0)
+		printk(KERN_ERR "rtl9210: SCSI error status: 0x%02x\n", iu->status);
+
+	kfree(iu);
 }
 
 static void rtl9210_inquiry_cmd_complete(struct urb *urb) {
 	struct command_iu *iu = urb->transfer_buffer;
+
+	if (urb->status)
+		printk(KERN_ERR "rtl9210: cmd URB failed: %d\n", urb->status);
+	else
+		printk(KERN_INFO "rtl9210: INQUIRY command sent\n");
+
+	kfree(iu);
 }
 
 static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
