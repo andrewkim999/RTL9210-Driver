@@ -126,21 +126,33 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	cmd_buf->tag       = cpu_to_be16(1);
 	cmd_buf->prio_attr = UAS_SIMPLE_TAG;	// executes in order, no special priority
 	cmd_buf->len       = 0;
-	int_to_scsilun(0, &cmd_iu->lun);	// LUN 0
+	int_to_scsilun(0, &cmd_iu->lun);		// LUN 0
 
 	cmd_buf->cdb[0] = 0x12;	// INQUIRY opcode
 	cmd_buf->cdb[1] = 0x00;	// EVPD = 0
 	cmd_buf->cdb[2] = 0x00;	// page code = 0
 	cmd_buf->cdb[3] = 0x00;	// reserved
-	cmd_buf->cdb[4] = INQUIRY_REPLY_LENGTH;	// allocation length
+	cmd_buf->cdb[4] = INQUIRY_REPLY_LEN;	// allocation length
 	cmd_buf->cdb[5] = 0x00;	// control
 
 
 	/* fill command URB -> EP4 OUT 0x04 */
 	usb_fill_bulk_urb(dev->cmd_urb, dev->udev,
 			usb_sndbulkpipe(dev->udev, 0x04),
-			cmd_iu, sizeof(*cmd_iu),
+			cmd_buf, sizeof(*cmd_buf),
 			rtl9210_cmd_complete, dev);
+
+	/* fill data-in URB -> EP1 IN 0x81 */
+	usb_fill_bulk_urb(dev->data_urb, dev->udev,
+			usb_sndbulkpipe(dev->udev, 0x81),
+			data_buf, sizeof(*data_buf),
+			rtl9210_data_complete, dev);
+
+	/* fill status URB -> EP3 IN 0x83 */
+	usb_fill_bulk_urb(dev->status_buf, dev->udev,
+			usb_sndbulkpipe(dev->udev, 0x83),
+			status_buf, sizeof(*status_buf),
+			rtl9210_status_complete, dev);
 
 	return 0;
 }
