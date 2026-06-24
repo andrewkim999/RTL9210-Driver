@@ -143,13 +143,13 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 
 	/* fill data-in URB -> EP1 IN 0x81 */
 	usb_fill_bulk_urb(dev->data_urb, dev->udev,
-			usb_sndbulkpipe(dev->udev, 0x81),
+			usb_rcvbulkpipe(dev->udev, 0x81),
 			data_buf, sizeof(*data_buf),
 			rtl9210_inquiry_data_complete, dev);
 
 	/* fill status URB -> EP3 IN 0x83 */
 	usb_fill_bulk_urb(dev->status_urb, dev->udev,
-			usb_sndbulkpipe(dev->udev, 0x83),
+			usb_rcvbulkpipe(dev->udev, 0x83),
 			status_iu, sizeof(*status_iu),
 			rtl9210_inquiry_status_complete, dev);
 
