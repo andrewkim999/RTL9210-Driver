@@ -73,10 +73,9 @@ static void rtl9210_inquiry_data_complete(struct urb *urb) {
 static void rtl9210_inquiry_status_complete(struct urb *urb) {
 	struct sense_iu *iu = urb->transfer_buffer;
 
-
 	if (urb->status) {
 		printk(KERN_ERR "rtl9210: status URB failed: %d\n", urb->status);
-		kfree(buf);
+		kfree(iu);
 		return;
 	}
 
@@ -101,60 +100,87 @@ static void rtl9210_inquiry_cmd_complete(struct urb *urb) {
 }
 
 static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
-	struct command_iu *cmd_buf;
+	struct command_iu *cmd_iu;
 	__u8 *data_buf;
-	struct sense_iu *status_buf;
+	struct sense_iu *status_iu;
+	int ret;
 
-	cmd_buf = kzalloc(sizeof(struct command_iu), GFP_KERNEL);
-	if (!cmd_buf)
+	cmd_iu = kzalloc(sizeof(struct command_iu), GFP_KERNEL);
+	if (!cmd_iu)
 		return -ENOMEM;
 
 	data_buf = kzalloc(INQUIRY_REPLY_LEN, GFP_KERNEL);
 	if (!data_buf) {
-		kfree(cmd_buf);
+		kfree(cmd_iu);
 		return -ENOMEM;
 	}
 
-	status_buf = kzalloc(sizeof(struct sense_iu), GFP_KERNEL);
-	if (!status_buf) {
-		kfree(cmd_buf);
+	status_iu = kzalloc(sizeof(struct sense_iu), GFP_KERNEL);
+	if (!status_iu) {
+		kfree(cmd_iu);
 		kfree(data_buf);
 		return -ENOMEM;
 	}
 	
-	cmd_buf->iu_id     = IU_ID_COMMAND;
-	cmd_buf->tag       = cpu_to_be16(1);
-	cmd_buf->prio_attr = UAS_SIMPLE_TAG;	// executes in order, no special priority
-	cmd_buf->len       = 0;
-	int_to_scsilun(0, &cmd_iu->lun);		// LUN 0
+	cmd_iu->iu_id     = IU_ID_COMMAND;
+	cmd_iu->tag       = cpu_to_be16(1);
+	cmd_iu->prio_attr = UAS_SIMPLE_TAG;	// executes in order, no special priority
+	cmd_iu->len       = 0;
+	int_to_scsilun(0, &cmd_iu->lun);	// LUN 0
 
-	cmd_buf->cdb[0] = 0x12;	// INQUIRY opcode
-	cmd_buf->cdb[1] = 0x00;	// EVPD = 0
-	cmd_buf->cdb[2] = 0x00;	// page code = 0
-	cmd_buf->cdb[3] = 0x00;	// reserved
-	cmd_buf->cdb[4] = INQUIRY_REPLY_LEN;	// allocation length
-	cmd_buf->cdb[5] = 0x00;	// control
-
+	cmd_iu->cdb[0] = 0x12;	// INQUIRY opcode
+	cmd_iu->cdb[1] = 0x00;	// EVPD = 0
+	cmd_iu->cdb[2] = 0x00;	// page code = 0
+	cmd_iu->cdb[3] = 0x00;	// reserved
+	cmd_iu->cdb[4] = INQUIRY_REPLY_LEN;	// allocation length
+	cmd_iu->cdb[5] = 0x00;	// control
 
 	/* fill command URB -> EP4 OUT 0x04 */
 	usb_fill_bulk_urb(dev->cmd_urb, dev->udev,
 			usb_sndbulkpipe(dev->udev, 0x04),
-			cmd_buf, sizeof(*cmd_buf),
-			rtl9210_cmd_complete, dev);
+			cmd_iu, sizeof(*cmd_iu),
+			rtl9210_inquiry_cmd_complete, dev);
 
 	/* fill data-in URB -> EP1 IN 0x81 */
 	usb_fill_bulk_urb(dev->data_urb, dev->udev,
 			usb_sndbulkpipe(dev->udev, 0x81),
 			data_buf, sizeof(*data_buf),
-			rtl9210_data_complete, dev);
+			rtl9210_inquiry_data_complete, dev);
 
 	/* fill status URB -> EP3 IN 0x83 */
-	usb_fill_bulk_urb(dev->status_buf, dev->udev,
+	usb_fill_bulk_urb(dev->status_urb, dev->udev,
 			usb_sndbulkpipe(dev->udev, 0x83),
-			status_buf, sizeof(*status_buf),
-			rtl9210_status_complete, dev);
+			status_iu, sizeof(*status_iu),
+			rtl9210_inquiry_status_complete, dev);
+
+	ret = usb_submit_urb(dev->status_urb, GFP_KERNEL);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: failed to submit status URB: %d\n", ret);
+		goto err_free;
+	}
+
+	ret = usb_submit_urb(dev->data_urb, GFP_KERNEL);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: failed to submit data URB: %d\n", ret);
+		usb_kill_urb(dev->status_urb);
+		goto err_free;
+	}
+
+	ret = usb_submit_urb(dev->cmd_urb, GFP_KERNEL);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: failed to submit command URB: %d\n", ret);
+		usb_kill_urb(dev->status_urb);
+		usb_kill_urb(dev->data_urb);
+		goto err_free;
+	}
 
 	return 0;
+
+err_free:
+	kfree(cmd_iu);
+	kfree(data_buf);
+	kfree(status_iu);
+	return ret;
 }
 
 /*	Array of vendor/product ID pairs my driver claims to support.
