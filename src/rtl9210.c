@@ -19,19 +19,16 @@ struct rtl9210_dev {
 	*/
 	struct usb_host_endpoint *data_in;	// EP1 IN  0x81
 	struct usb_host_endpoint *data_out;	// EP2 OUT 0x02
-	struct usb_host_endpoint *status;	// EP3 IN  0x83
-	struct usb_host_endpoint *cmd;		// EP4 OUT 0x04
 	
-	struct urb *data_urb;
-	struct urb *status_urb;
-	struct urb *cmd_urb;
+	struct urb *bulk_in_urb;
+	struct urb *bulk_out_urb;
 };
 
 /* endpoint parsing function */
 static int rtl9210_find_endpoints(struct rtl9210_dev *dev) {
 	struct usb_host_interface *alt = dev->intf->cur_altsetting;
 	struct usb_endpoint_descriptor *ep;
-	
+
 	for (int i = 0; i < alt->desc.bNumEndpoints; i++) {
 		ep = &alt->endpoint[i].desc;
 
@@ -39,14 +36,10 @@ static int rtl9210_find_endpoints(struct rtl9210_dev *dev) {
 			dev->data_in = &alt->endpoint[i];
 		else if (usb_endpoint_is_bulk_out(ep) && ep->bEndpointAddress == 0x02)
 			dev->data_out = &alt->endpoint[i];
-		else if (usb_endpoint_is_bulk_in(ep) && ep->bEndpointAddress == 0x83)
-			dev->status = &alt->endpoint[i];
-		else if (usb_endpoint_is_bulk_out(ep) && ep->bEndpointAddress == 0x04)
-			dev->cmd = &alt->endpoint[i];
 	}
 
-	if (!dev->data_in || !dev->data_out || !dev->status || !dev->cmd) {
-		printk(KERN_ERR "RTL9210: missing endpoints\n");
+	if (!dev->data_in || !dev->data_out) {
+		printk(KERN_ERR "rtl9210: missing endpoints\n");
 		return -ENODEV;
 	}
 
@@ -136,20 +129,20 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	cmd_iu->cdb[5] = 0x00;	// control
 
 	/* fill command URB -> EP4 OUT 0x04 */
-	usb_fill_bulk_urb(dev->cmd_urb, dev->udev,
-			usb_sndbulkpipe(dev->udev, 0x04),
+	usb_fill_bulk_urb(dev->bulk_out_urb, dev->udev,
+			usb_sndbulkpipe(dev->udev, 0x02),
 			cmd_iu, sizeof(*cmd_iu),
 			rtl9210_inquiry_cmd_complete, dev);
 
 	/* fill data-in URB -> EP1 IN 0x81 */
-	usb_fill_bulk_urb(dev->data_urb, dev->udev,
+	usb_fill_bulk_urb(dev->bulk_in_urb, dev->udev,
 			usb_rcvbulkpipe(dev->udev, 0x81),
 			data_buf, sizeof(*data_buf),
 			rtl9210_inquiry_data_complete, dev);
 
 	/* fill status URB -> EP3 IN 0x83 */
 	usb_fill_bulk_urb(dev->status_urb, dev->udev,
-			usb_rcvbulkpipe(dev->udev, 0x83),
+			usb_rcvbulkpipe(dev->udev, 0x81),
 			status_iu, sizeof(*status_iu),
 			rtl9210_inquiry_status_complete, dev);
 
@@ -215,21 +208,6 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	printk(KERN_INFO "rtl9210: protocol %s\n",
 		   protocol == USB_PR_UAS ? "UAS" : "Bulk-Only");
 	
-	if (protocol != USB_PR_UAS) {
-		printk(KERN_INFO "rtl9210: switching to UAS mode\n");
-
-		/* interface: the interface being updated, alternate: the setting being chosen */
-		ret = usb_set_interface(udev, 0, 1); 	// interface = 0, alternate = 1
-		if (ret) {
-			printk(KERN_ERR "rtl9210: failed to switch to UAS: %d\n", ret);
-			return ret;
-		}
-
-		protocol = intf->cur_altsetting->desc.bInterfaceProtocol;
-		printk(KERN_INFO "rtl9210: protocol now %s\n",
-				protocol == USB_PR_UAS ? "UAS" : "Bulk-Only");
-	}
-
 	dev = kzalloc(sizeof(struct rtl9210_dev), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;
@@ -242,7 +220,7 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 		kfree(dev);
 		return ret;
 	}
-	printk(KERN_INFO "rtl9210: found all 4 endpoints\n");
+	printk(KERN_INFO "rtl9210: found all 2 endpoints\n");
 
 	/* allocate URBs */
 	dev->data_urb = usb_alloc_urb(0, GFP_KERNEL);
