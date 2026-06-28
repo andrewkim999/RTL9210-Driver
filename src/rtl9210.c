@@ -1,6 +1,7 @@
 #include <linux/module.h>
 #include <linux/usb.h>
 #include <linux/usb/uas.h>
+#include <linux/usb/storage.h>
 
 #define RTL_VENDOR_ID	0x0bda
 #define RTL_PRODUCT_ID	0x9210
@@ -22,6 +23,9 @@ struct rtl9210_dev {
 	
 	struct urb *bulk_in_urb;
 	struct urb *bulk_out_urb;
+
+	struct completion urb_done;
+	int urb_status;
 };
 
 /* endpoint parsing function */
@@ -46,81 +50,36 @@ static int rtl9210_find_endpoints(struct rtl9210_dev *dev) {
 	return 0;
 }
 
-static void rtl9210_inquiry_data_complete(struct urb *urb) {
-	__u8 *buf = urb->transfer_buffer;
-
-	if (urb->status) {
-		printk(KERN_ERR "rtl9210: data URB failed: %d\n", urb->status);
-		kfree(buf);
-		return;
-	}
-
-	printk(KERN_INFO "rtl9210: INQUIRY response received\n");
-	printk(KERN_INFO "rtl9210: vendor:   %.8s\n",  &buf[8]);
-	printk(KERN_INFO "rtl9210: product:  %.16s\n", &buf[16]);
-	printk(KERN_INFO "rtl9210: revision: %.4s\n",  &buf[32]);
-
-	kfree(buf);
-}
-
-static void rtl9210_inquiry_status_complete(struct urb *urb) {
-	struct sense_iu *iu = urb->transfer_buffer;
-
-	if (urb->status) {
-		printk(KERN_ERR "rtl9210: status URB failed: %d\n", urb->status);
-		kfree(iu);
-		return;
-	}
-
-	printk(KERN_INFO "rtl9210: status iu_id=0x%02x status=0x%02x\n", 
-			iu->iu_id, iu->status);
-
-	if (iu->status != 0)
-		printk(KERN_ERR "rtl9210: SCSI error status: 0x%02x\n", iu->status);
-
-	kfree(iu);
-}
-
-static void rtl9210_inquiry_cmd_complete(struct urb *urb) {
-	struct command_iu *iu = urb->transfer_buffer;
-
-	if (urb->status)
-		printk(KERN_ERR "rtl9210: cmd URB failed: %d\n", urb->status);
-	else
-		printk(KERN_INFO "rtl9210: INQUIRY command sent\n");
-
-	kfree(iu);
+static void rtl9210_urb_complete(struct urb *urb) {
+	struct rtl9210_dev *dev = urb->context;
+	dev->urb_status = urb->status;
+	complete(&dev->urb_done);
 }
 
 static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
-	struct command_iu *cmd_iu;
+	struct bulk_cb_wrap *cbw;
+	struct bulk_cs_wrap *csw;
 	__u8 *data_buf;
-	struct sense_iu *status_iu;
 	int ret;
 
-	cmd_iu = kzalloc(sizeof(struct command_iu), GFP_KERNEL);
-	if (!cmd_iu)
+	cbw = kzalloc(sizeof(struct bulk_cb_wrap), GFP_KERNEL);
+	if (!cbw)
 		return -ENOMEM;
 
 	data_buf = kzalloc(INQUIRY_REPLY_LEN, GFP_KERNEL);
 	if (!data_buf) {
-		kfree(cmd_iu);
+		kfree(cbw);
 		return -ENOMEM;
 	}
 
-	status_iu = kzalloc(sizeof(struct sense_iu), GFP_KERNEL);
-	if (!status_iu) {
-		kfree(cmd_iu);
+	csw = kzalloc(sizeof(struct bulk_cs_wrap), GFP_KERNEL);
+	if (!csw) {
+		kfree(cbw);
 		kfree(data_buf);
 		return -ENOMEM;
 	}
 	
-	cmd_iu->iu_id     = IU_ID_COMMAND;
-	cmd_iu->tag       = cpu_to_be16(1);
-	cmd_iu->prio_attr = UAS_SIMPLE_TAG;	// executes in order, no special priority
-	cmd_iu->len       = 0;
-	int_to_scsilun(0, &cmd_iu->lun);	// LUN 0
-
+	cbw->Signature = 
 	cmd_iu->cdb[0] = 0x12;	// INQUIRY opcode
 	cmd_iu->cdb[1] = 0x00;	// EVPD = 0
 	cmd_iu->cdb[2] = 0x00;	// page code = 0
@@ -223,30 +182,20 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	printk(KERN_INFO "rtl9210: found all 2 endpoints\n");
 
 	/* allocate URBs */
-	dev->data_urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (!dev->data_urb) {
+	dev->bulk_in_urb = usb_alloc_urb(0, GFP_KERNEL);
+	if (!dev->bulk_in_urb) {
 		kfree(dev);
 		return -ENOMEM;
 	}
 
-	dev->status_urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (!dev->status_urb) {
-		usb_free_urb(dev->data_urb);
-		kfree(dev);
-		return -ENOMEM;
-	}
-	
-	dev->cmd_urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (!dev->cmd_urb) {
-		usb_free_urb(dev->data_urb);
-		usb_free_urb(dev->status_urb);
+	dev->bulk_out_urb = usb_alloc_urb(0, GFP_KERNEL);
+	if (!dev->bulk_out_urb) {
+		usb_free_urb(dev->bulk_in_urb);
 		kfree(dev);
 		return -ENOMEM;
 	}
 	
 	printk(KERN_INFO "rtl9210: URBs allocated\n");
-
-	rtl9210_send_inquiry(dev);
 
 	/**
  	 * usb_set_intfdata() - associate driver-specific data with an interface
@@ -262,6 +211,10 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	/* source: linux kernel usb.h */
 	usb_set_intfdata(intf, dev);
 
+	ret = rtl9210_send_inquiry(dev);
+	if (ret)
+		printk(KERN_ERR "rtl9210: inquiry failed: %d\n", ret);
+
 	return 0;
 }
 
@@ -270,9 +223,8 @@ static void rtl9210_disconnect(struct usb_interface *intf) {
 	
 	usb_set_intfdata(intf, NULL);
 
-	usb_free_urb(dev->data_urb);
-	usb_free_urb(dev->status_urb);
-	usb_free_urb(dev->cmd_urb);
+	usb_free_urb(dev->bulk_in_urb);
+	usb_free_urb(dev->bulk_out_urb);
 	kfree(dev);
 	
 	printk(KERN_INFO "rtl9210: device disconnected\n");
