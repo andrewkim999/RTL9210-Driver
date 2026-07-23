@@ -79,59 +79,87 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 		return -ENOMEM;
 	}
 	
-	cbw->Signature = 
-	cmd_iu->cdb[0] = 0x12;	// INQUIRY opcode
-	cmd_iu->cdb[1] = 0x00;	// EVPD = 0
-	cmd_iu->cdb[2] = 0x00;	// page code = 0
-	cmd_iu->cdb[3] = 0x00;	// reserved
-	cmd_iu->cdb[4] = INQUIRY_REPLY_LEN;	// allocation length
-	cmd_iu->cdb[5] = 0x00;	// control
+	cbw->Signature 			= cpu_to_le32(0x43425355);
+    cbw->Tag 				= cpu_to_le32(1);
+	cbw->DataTransferLength = cpu_to_le32(INQUIRY_REPLY_LEN);
+	cbw->Flags 				= 0x80;
+	cbw->Lun 				= 0;
+	cbw->Length 			= 6;	// INQUIRY CDB is 6 bytes
+	cbw->CDB[0] 			= 0x12;	// INQUIRY opcode
+	cbw->CDB[4] 			= INQUIRY_REPLY_LEN;
 
-	/* fill command URB -> EP4 OUT 0x04 */
+	/* phase 1: send CBW */
+	init_completion(&dev->urb_done);
 	usb_fill_bulk_urb(dev->bulk_out_urb, dev->udev,
 			usb_sndbulkpipe(dev->udev, 0x02),
-			cmd_iu, sizeof(*cmd_iu),
-			rtl9210_inquiry_cmd_complete, dev);
+			cbw, sizeof(*cbw),
+			rtl9210_urb_complete, dev);
 
-	/* fill data-in URB -> EP1 IN 0x81 */
+	ret = usb_submit_urb(dev->bulk_out_urb, GFP_KERNEL);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: failed to submit CBW: %d\n", ret);
+		goto err_free;
+	}
+	wait_for_completion(&dev->urb_done);
+
+	if (dev->urb_status) {
+		printk(KERN_ERR "rtl9210: CBW failed: %d\n", dev->urb_status);
+		ret = dev->urb_status;
+		goto err_free;
+	}
+	printk(KERN_INFO "rtl9210: CBW sent\n");
+
+	/* phase 2: receive data */
+	init_completion(&dev->urb_done);
 	usb_fill_bulk_urb(dev->bulk_in_urb, dev->udev,
 			usb_rcvbulkpipe(dev->udev, 0x81),
 			data_buf, sizeof(*data_buf),
-			rtl9210_inquiry_data_complete, dev);
-
-	/* fill status URB -> EP3 IN 0x83 */
-	usb_fill_bulk_urb(dev->status_urb, dev->udev,
-			usb_rcvbulkpipe(dev->udev, 0x81),
-			status_iu, sizeof(*status_iu),
-			rtl9210_inquiry_status_complete, dev);
-
-	ret = usb_submit_urb(dev->status_urb, GFP_KERNEL);
-	if (ret) {
-		printk(KERN_ERR "rtl9210: failed to submit status URB: %d\n", ret);
-		goto err_free;
-	}
-
-	ret = usb_submit_urb(dev->data_urb, GFP_KERNEL);
+			rtl9210_urb_complete, dev);
+	
+	ret = usb_submit_urb(dev->bulk_in_urb, GFP_KERNEL);
 	if (ret) {
 		printk(KERN_ERR "rtl9210: failed to submit data URB: %d\n", ret);
-		usb_kill_urb(dev->status_urb);
 		goto err_free;
 	}
+	wait_for_completion(&dev->urb_done);
 
-	ret = usb_submit_urb(dev->cmd_urb, GFP_KERNEL);
-	if (ret) {
-		printk(KERN_ERR "rtl9210: failed to submit command URB: %d\n", ret);
-		usb_kill_urb(dev->status_urb);
-		usb_kill_urb(dev->data_urb);
+	if (dev->urb_status) {
+		printk(KERN_ERR "rtl9210: data failed: %d\n", dev->urb_status);
+		ret = dev->urb_status;
 		goto err_free;
 	}
+	printk(KERN_INFO "rtl9210: INQUIRY response received\n");
+	printk(KERN_INFO "rtl9210: vendor: 	 %.8s\n",  &data_buf[8]);
+	printk(KERN_INFO "rtl9210: product:  %.16s\n", &data_buf[16]);
+	printk(KERN_INFO "rtl9210: revision: %.4s\n",  &data_buf[32]);
+
+	/* phase 3: receive CSW */
+	init_completion(&dev->urb_done);
+	usb_fill_bulk_urb(dev->bulk_in_urb, dev->udev,
+			usb_rcvbulkpipe(dev->udev, 0x81),
+			csw, sizeof(*csw),
+			rtl9210_urb_complete, dev);
+
+	ret = usb_submit_urb(dev->bulk_in_urb, GFP_KERNEL);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: failed to submit CSW URB: %d\n", ret);
+		goto err_free;
+	}
+	wait_for_completion(&dev->urb_done);
+
+	if (dev->urb_status) {
+		printk(KERN_ERR "rtl9210: CSW failed: %d\n", dev->urb_status);
+		ret = dev->urb_status;
+		goto err_free;
+	}
+	printk(KERN_INFO "rtl9210: CSW status=0x%02x\n", csw->Status);
 
 	return 0;
 
 err_free:
-	kfree(cmd_iu);
+	kfree(cbw);
 	kfree(data_buf);
-	kfree(status_iu);
+	kfree(csw);
 	return ret;
 }
 
