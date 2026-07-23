@@ -26,6 +26,10 @@ Endpoint Descriptors (UAS Mode)
 * Status   (0x02) Endpoint Address: 0x83 EP 3 IN
 * Command  (0x01) Endpoint Address: 0x04 EP 4 OUT
 
+Endpoint Descriptors (BOT Mode)
+-------------------------------
+* Bulk-in  (0x81) Endpoint Address: 0x81 EP 1 IN
+* Bulk-out (0x02) Endpoint Address: 0x02 EP 2 OUT
 
 Software
 ========
