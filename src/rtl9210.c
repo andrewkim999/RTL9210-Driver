@@ -56,6 +56,22 @@ static void rtl9210_urb_complete(struct urb *urb) {
 	complete(&dev->urb_done);
 }
 
+static int rtl9210_bot_reset_recovery(struct rtl9210_dev *dev) {
+	int ret;
+
+	ret = usb_control_msg(dev->udev, usb_sndctrlpipe(dev->udev, 0),
+			0xff, USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+			0, dev->intf->cur_altsetting->desc.bInterfaceNumber,
+			NULL, 0, 5000);
+	if (ret < 0)
+		printk(KERN_WARNING "rtl9210: BOT reset failed: %d\n", ret);
+
+	usb_clear_halt(dev->udev, usb_sndbulkpipe(dev->udev, 0x02));
+	usb_clear_halt(dev->udev, usb_rcvbulkpipe(dev->udev, 0x81));
+
+	return ret;
+}
+
 static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	struct bulk_cb_wrap *cbw;
 	struct bulk_cs_wrap *csw;
@@ -88,6 +104,8 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	cbw->CDB[0] 			= 0x12;	// INQUIRY opcode
 	cbw->CDB[4] 			= INQUIRY_REPLY_LEN;
 
+	rtl9210_bot_reset_recovery(dev);
+
 	/* phase 1: send CBW */
 	init_completion(&dev->urb_done);
 	usb_fill_bulk_urb(dev->bulk_out_urb, dev->udev,
@@ -110,10 +128,12 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	printk(KERN_INFO "rtl9210: CBW sent\n");
 
 	/* phase 2: receive data */
+	//usb_clear_halt(dev->udev, usb_rcvbulkpipe(dev->udev, 0x81));
+
 	init_completion(&dev->urb_done);
 	usb_fill_bulk_urb(dev->bulk_in_urb, dev->udev,
 			usb_rcvbulkpipe(dev->udev, 0x81),
-			data_buf, sizeof(*data_buf),
+			data_buf, INQUIRY_REPLY_LEN,
 			rtl9210_urb_complete, dev);
 	
 	ret = usb_submit_urb(dev->bulk_in_urb, GFP_KERNEL);
@@ -122,6 +142,8 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 		goto err_free;
 	}
 	wait_for_completion(&dev->urb_done);
+	printk(KERN_INFO "rtl9210: CBW sent, actual=%d\n", 
+			dev->bulk_out_urb->actual_length);
 
 	if (dev->urb_status) {
 		printk(KERN_ERR "rtl9210: data failed: %d\n", dev->urb_status);
@@ -154,9 +176,11 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	}
 	printk(KERN_INFO "rtl9210: CSW status=0x%02x\n", csw->Status);
 
-	return 0;
+	ret = 0;
 
 err_free:
+	rtl9210_bot_reset_recovery(dev);
+	
 	kfree(cbw);
 	kfree(data_buf);
 	kfree(csw);
