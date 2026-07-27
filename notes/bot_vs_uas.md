@@ -6,6 +6,6 @@ Host sends a command block wrapper (CBW), which is a BOT-specific envelope. The 
 
 UAS (USB Attached SCSI)
 -----------------------
-UAS sends commands in parallel, unlike BOT. Up to 32 commands can be sent simultaneously. How does it do this? It's due to UAS using 4 endpoints (command, data IN, data OUT, status) instead of 2. While one command is being sent to the host, the host can be sending data for another command. This improves performance significantly if there are many different operations queued (eg. read after write after read). Only compatible with USB 3.0 and up.
+UAS sends commands in parallel, unlike BOT. Up to 32 commands can be sent simultaneously. How does it do this? It's due to UAS using 4 endpoints (command, data IN, data OUT, status) instead of 2. While one command is being sent to the host, the host can be sending data for another command. This improves performance significantly if there are many different operations queued (eg. read after write after read). This feature is called streams, which is only compatible with USB 3.0 and up.
 
-In our device, the default protocol selected is BOT, and this can be seen at bInterfaceProtocol under the Interface Descriptor. We change the protocol from BOT to UAS immediately in our prove function to improve performance and reduce latency.
+One thing to note is that we are using vhci_hcd to test our driver, which is a virtual USB controller provided by our WSL2. vhci_hcd does not support streams required by UAS, so in this case we choose to use BOT due to hardware limitations.
