@@ -8,8 +8,6 @@
 #define USB_PR_BULK		0x50
 #define USB_PR_UAS		0x62
 #define INQUIRY_REPLY_LEN 96
-#define BULK_CB_WRAP_LEN  31
-#define BULK_CS_WRAP_LEN  13
 
 /* stores per device state */
 struct rtl9210_dev {
@@ -57,7 +55,7 @@ static void rtl9210_urb_complete(struct urb *urb) {
 	dev->urb_status = urb->status;
 	complete(&dev->urb_done);
 }
-
+/*
 static int rtl9210_bot_reset_recovery(struct rtl9210_dev *dev) {
 	int ret;
 
@@ -72,7 +70,7 @@ static int rtl9210_bot_reset_recovery(struct rtl9210_dev *dev) {
 	usb_clear_halt(dev->udev, usb_rcvbulkpipe(dev->udev, 0x81));
 
 	return ret;
-}
+}*/
 
 static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	struct bulk_cb_wrap *cbw;
@@ -96,11 +94,13 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 		kfree(data_buf);
 		return -ENOMEM;
 	}
-	
-	cbw->Signature 			= cpu_to_le32(0x43425355);
+
+	printk(KERN_INFO "sizeof(*csw)=%d\n", sizeof(*csw));
+
+	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
     cbw->Tag 				= cpu_to_le32(1);
 	cbw->DataTransferLength = cpu_to_le32(INQUIRY_REPLY_LEN);
-	cbw->Flags 				= 0x80;
+	cbw->Flags 				= 0x80;	// data IN (device -> host)
 	cbw->Lun 				= 0;
 	cbw->Length 			= 6;	// INQUIRY CDB is 6 bytes
 	cbw->CDB[0] 			= 0x12;	// INQUIRY opcode
@@ -112,20 +112,20 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	init_completion(&dev->urb_done);
 	usb_fill_bulk_urb(dev->bulk_out_urb, dev->udev,
 			usb_sndbulkpipe(dev->udev, 0x02),
-			cbw, BULK_CB_WRAP_LEN,
+			cbw, US_BULK_CB_WRAP_LEN,
 			rtl9210_urb_complete, dev);
 
 	ret = usb_submit_urb(dev->bulk_out_urb, GFP_KERNEL);
 	if (ret) {
 		printk(KERN_ERR "rtl9210: failed to submit CBW: %d\n", ret);
-		goto err_free;
+		goto done;
 	}
 	wait_for_completion(&dev->urb_done);
 
-	if (dev->urb_status) {
+	if (dev->urb_status != US_BULK_STAT_OK) {
 		printk(KERN_ERR "rtl9210: CBW failed: %d\n", dev->urb_status);
 		ret = dev->urb_status;
-		goto err_free;
+		goto done;
 	}
 	printk(KERN_INFO "rtl9210: CBW sent\n");
 
@@ -141,7 +141,7 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	ret = usb_submit_urb(dev->bulk_in_urb, GFP_KERNEL);
 	if (ret) {
 		printk(KERN_ERR "rtl9210: failed to submit data URB: %d\n", ret);
-		goto err_free;
+		goto done;
 	}
 	wait_for_completion(&dev->urb_done);
 	printk(KERN_INFO "rtl9210: data phase actual=%d, status=%d\n", 
@@ -150,37 +150,41 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	if (dev->urb_status) {
 		printk(KERN_ERR "rtl9210: data failed: %d\n", dev->urb_status);
 		ret = dev->urb_status;
-		goto err_free;
+		goto done;
 	}
 	printk(KERN_INFO "rtl9210: INQUIRY response received\n");
-	printk(KERN_INFO "rtl9210: vendor: %.8s\n", &data_buf[8]);
-	printk(KERN_INFO "rtl9210: product: %.16s\n", &data_buf[16]);
-	printk(KERN_INFO "rtl9210: revision: %.4s\n", &data_buf[32]);
+	printk(KERN_INFO "rtl9210: vendor:   %.8s\n",  &data_buf[8]);
+	printk(KERN_INFO "rtl9210: product:  %.16s\n", &data_buf[16]);
+	printk(KERN_INFO "rtl9210: revision: %.4s\n",  &data_buf[32]);
 
 	/* phase 3: receive CSW */
 	init_completion(&dev->urb_done);
 	usb_fill_bulk_urb(dev->bulk_in_urb, dev->udev,
 			usb_rcvbulkpipe(dev->udev, 0x81),
-			csw, BULK_CS_WRAP_LEN,
+			csw, US_BULK_CS_WRAP_LEN,
 			rtl9210_urb_complete, dev);
 
 	ret = usb_submit_urb(dev->bulk_in_urb, GFP_KERNEL);
 	if (ret) {
 		printk(KERN_ERR "rtl9210: failed to submit CSW URB: %d\n", ret);
-		goto err_free;
+		goto done;
 	}
 	wait_for_completion(&dev->urb_done);
 
-	if (dev->urb_status) {
+	if (dev->urb_status != US_BULK_STAT_OK) {
 		printk(KERN_ERR "rtl9210: CSW failed: %d\n", dev->urb_status);
 		ret = dev->urb_status;
-		goto err_free;
+		goto done;
 	}
-	printk(KERN_INFO "rtl9210: CSW status=0x%02x\n", csw->Status);
+
+	printk(KERN_INFO "rtl9210: CSW Signature=0x%02x\n", csw->Signature);
+	printk(KERN_INFO "rtl9210: CSW Tag      =0x%02x\n", csw->Tag);
+	printk(KERN_INFO "rtl9210: CSW Residue  =0x%02x\n", csw->Residue);
+	printk(KERN_INFO "rtl9210: CSW status   =0x%02x\n", csw->Status);
 
 	ret = 0;
 
-err_free:
+done:
 //	rtl9210_bot_reset_recovery(dev);
 	
 	kfree(cbw);
