@@ -8,6 +8,8 @@
 #define USB_PR_BULK		0x50
 #define USB_PR_UAS		0x62
 #define INQUIRY_REPLY_LEN 96
+#define BULK_CB_WRAP_LEN  31
+#define BULK_CS_WRAP_LEN  13
 
 /* stores per device state */
 struct rtl9210_dev {
@@ -104,13 +106,13 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	cbw->CDB[0] 			= 0x12;	// INQUIRY opcode
 	cbw->CDB[4] 			= INQUIRY_REPLY_LEN;
 
-	rtl9210_bot_reset_recovery(dev);
+//	rtl9210_bot_reset_recovery(dev);
 
 	/* phase 1: send CBW */
 	init_completion(&dev->urb_done);
 	usb_fill_bulk_urb(dev->bulk_out_urb, dev->udev,
 			usb_sndbulkpipe(dev->udev, 0x02),
-			cbw, sizeof(*cbw),
+			cbw, BULK_CB_WRAP_LEN,
 			rtl9210_urb_complete, dev);
 
 	ret = usb_submit_urb(dev->bulk_out_urb, GFP_KERNEL);
@@ -142,8 +144,8 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 		goto err_free;
 	}
 	wait_for_completion(&dev->urb_done);
-	printk(KERN_INFO "rtl9210: CBW sent, actual=%d\n", 
-			dev->bulk_out_urb->actual_length);
+	printk(KERN_INFO "rtl9210: data phase actual=%d, status=%d\n", 
+			dev->bulk_out_urb->actual_length, dev->urb_status);
 
 	if (dev->urb_status) {
 		printk(KERN_ERR "rtl9210: data failed: %d\n", dev->urb_status);
@@ -151,15 +153,15 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 		goto err_free;
 	}
 	printk(KERN_INFO "rtl9210: INQUIRY response received\n");
-	printk(KERN_INFO "rtl9210: vendor: 	 %.8s\n",  &data_buf[8]);
-	printk(KERN_INFO "rtl9210: product:  %.16s\n", &data_buf[16]);
-	printk(KERN_INFO "rtl9210: revision: %.4s\n",  &data_buf[32]);
+	printk(KERN_INFO "rtl9210: vendor: %.8s\n", &data_buf[8]);
+	printk(KERN_INFO "rtl9210: product: %.16s\n", &data_buf[16]);
+	printk(KERN_INFO "rtl9210: revision: %.4s\n", &data_buf[32]);
 
 	/* phase 3: receive CSW */
 	init_completion(&dev->urb_done);
 	usb_fill_bulk_urb(dev->bulk_in_urb, dev->udev,
 			usb_rcvbulkpipe(dev->udev, 0x81),
-			csw, sizeof(*csw),
+			csw, BULK_CS_WRAP_LEN,
 			rtl9210_urb_complete, dev);
 
 	ret = usb_submit_urb(dev->bulk_in_urb, GFP_KERNEL);
@@ -179,7 +181,7 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	ret = 0;
 
 err_free:
-	rtl9210_bot_reset_recovery(dev);
+//	rtl9210_bot_reset_recovery(dev);
 	
 	kfree(cbw);
 	kfree(data_buf);
