@@ -98,7 +98,7 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	printk(KERN_INFO "sizeof(*csw)=%d\n", sizeof(*csw));
 
 	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
-    cbw->Tag 				= cpu_to_le32(1);
+    cbw->Tag 				= 1;
 	cbw->DataTransferLength = cpu_to_le32(INQUIRY_REPLY_LEN);
 	cbw->Flags 				= 0x80;	// data IN (device -> host)
 	cbw->Lun 				= 0;
