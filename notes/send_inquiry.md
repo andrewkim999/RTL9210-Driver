@@ -4,7 +4,7 @@ Since we are using BOT to transfer data, we use the command block wrapper (bulk_
 
 send CBW -> wait -> receive data -> wait -> receive CSW -> wait -> done
 
-Note that there are delays that must happen between each steps due to the time taken to transfer. We must provide these delays through the use of the completion struct. Otherwise the driver will not wait for the transfer and move to the next step immediately.
+Notice that there are delays that must happen between each steps due to the time taken to transfer. We must provide these delays through the use of the completion struct. Otherwise the driver will not wait for the transfer and move to the next step immediately.
 
 There are 2 threads running during this part of the inquiry code. Thread 1 runs the driver code, and thread 2 runs the USB interrupt handler. When thread 1 calls usb_submit_urb(), the USB host controller (thread 2) handles the transfer in the background using interrupts. We must stop the driver code from filling and submitting a new URB before the transfer completes for the previous URB. Thus we make thread 1 sleep until the transfer is finished. The wait_for_completion function allows thread 1 to sleep until thread 2 finishes the transfer and calls the urb_complete function. 
 
