@@ -13,11 +13,7 @@
 struct rtl9210_dev {
 	struct usb_device *udev;
 	struct usb_interface *intf;
-
-	/* UAS endpoints 
-	   bit 7 set = IN (device -> host)
-	   bit 7 clear = OUT (host -> device)
-	*/
+	
 	struct usb_host_endpoint *data_in;	// EP1 IN  0x81
 	struct usb_host_endpoint *data_out;	// EP2 OUT 0x02
 	
