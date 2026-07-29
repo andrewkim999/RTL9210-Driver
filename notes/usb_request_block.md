@@ -37,6 +37,7 @@ BOT
 * bulk-out URB -> EP 2 OUT (send write command)
 * bulk-out URB -> EP 2 OUT (send data)
 * bulk-in URB  <- EP 1 IN  (receive status)
+
 UAS
 ---
 * command URB  -> EP 4 OUT (send write command)
