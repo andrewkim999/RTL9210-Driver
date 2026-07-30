@@ -25,7 +25,8 @@ struct rtl9210_dev {
 };
 
 /* endpoint parsing function */
-static int rtl9210_find_endpoints(struct rtl9210_dev *dev) {
+static int rtl9210_find_endpoints(struct rtl9210_dev *dev) 
+{
 	struct usb_host_interface *alt = dev->intf->cur_altsetting;
 	struct usb_endpoint_descriptor *ep;
 
@@ -46,10 +47,30 @@ static int rtl9210_find_endpoints(struct rtl9210_dev *dev) {
 	return 0;
 }
 
-static void rtl9210_urb_complete(struct urb *urb) {
+static void rtl9210_urb_complete(struct urb *urb) 
+{
 	struct rtl9210_dev *dev = urb->context;
 	dev->urb_status = urb->status;
 	complete(&dev->urb_done);
+}
+
+static int rtl9210_bulk_transfer(struct rtl9210_dev *dev, struct urb *urb, 
+								 unsigned int pipe, void *buf, int len) 
+{	
+	int ret;
+
+	init_completion(&dev->urb_done);
+	usb_fill_bulk_urb(urb, dev->udev, pipe, buf, len, rtl9210_urb_complete, dev);
+
+	ret = usb_submit_urb(urb, GFP_KERNEL);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: failed to submit URB: %d\n", ret);	
+		return ret;
+	}
+
+	wait_for_completion(&dev->urb_done);
+
+	return dev->urb_status;
 }
 /*
 static int rtl9210_bot_reset_recovery(struct rtl9210_dev *dev) {
@@ -68,7 +89,8 @@ static int rtl9210_bot_reset_recovery(struct rtl9210_dev *dev) {
 	return ret;
 }*/
 
-static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
+static int rtl9210_send_inquiry(struct rtl9210_dev *dev) 
+{
 	struct bulk_cb_wrap *cbw;
 	struct bulk_cs_wrap *csw;
 	__u8 *data_buf;
@@ -103,74 +125,37 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 //	rtl9210_bot_reset_recovery(dev);
 
 	/* phase 1: send CBW */
-	init_completion(&dev->urb_done);
-	usb_fill_bulk_urb(dev->bulk_out_urb, dev->udev,
-			usb_sndbulkpipe(dev->udev, 0x02),
-			cbw, US_BULK_CB_WRAP_LEN,
-			rtl9210_urb_complete, dev);
-
-	ret = usb_submit_urb(dev->bulk_out_urb, GFP_KERNEL);
+	ret = rtl9210_bulk_transfer(dev, dev->bulk_out_urb, 
+			usb_sndbulkpipe(dev->udev, 0x02), cbw, US_BULK_CB_WRAP_LEN);
+	
 	if (ret) {
-		printk(KERN_ERR "rtl9210: failed to submit CBW: %d\n", ret);
-		goto done;
-	}
-	wait_for_completion(&dev->urb_done);
-
-	if (dev->urb_status != US_BULK_STAT_OK) {
-		printk(KERN_ERR "rtl9210: CBW failed: %d\n", dev->urb_status);
-		ret = dev->urb_status;
+		printk(KERN_ERR "rtl9210: CBW failed: %d\n", ret);
 		goto done;
 	}
 	printk(KERN_INFO "rtl9210: CBW sent\n");
 
 	/* phase 2: receive data */
 	//usb_clear_halt(dev->udev, usb_rcvbulkpipe(dev->udev, 0x81));
-
-	init_completion(&dev->urb_done);
-	usb_fill_bulk_urb(dev->bulk_in_urb, dev->udev,
-			usb_rcvbulkpipe(dev->udev, 0x81),
-			data_buf, INQUIRY_REPLY_LEN,
-			rtl9210_urb_complete, dev);
+	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb, 
+			usb_rcvbulkpipe(dev->udev, 0x81), data_buf, INQUIRY_REPLY_LEN);
 	
-	ret = usb_submit_urb(dev->bulk_in_urb, GFP_KERNEL);
 	if (ret) {
-		printk(KERN_ERR "rtl9210: failed to submit data URB: %d\n", ret);
-		goto done;
-	}
-	wait_for_completion(&dev->urb_done);
-	printk(KERN_INFO "rtl9210: data phase actual=%d, status=%d\n", 
-			dev->bulk_out_urb->actual_length, dev->urb_status);
-
-	if (dev->urb_status) {
-		printk(KERN_ERR "rtl9210: data failed: %d\n", dev->urb_status);
-		ret = dev->urb_status;
+		printk(KERN_ERR "rtl9210: data failed: %d\n", ret);
 		goto done;
 	}
 	printk(KERN_INFO "rtl9210: INQUIRY response received\n");
 	printk(KERN_INFO "rtl9210: vendor:   %.8s\n",  &data_buf[8]);
 	printk(KERN_INFO "rtl9210: product:  %.16s\n", &data_buf[16]);
 	printk(KERN_INFO "rtl9210: revision: %.4s\n",  &data_buf[32]);
-
+	
 	/* phase 3: receive CSW */
-	init_completion(&dev->urb_done);
-	usb_fill_bulk_urb(dev->bulk_in_urb, dev->udev,
-			usb_rcvbulkpipe(dev->udev, 0x81),
-			csw, US_BULK_CS_WRAP_LEN,
-			rtl9210_urb_complete, dev);
-
-	ret = usb_submit_urb(dev->bulk_in_urb, GFP_KERNEL);
+	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb, 
+			usb_rcvbulkpipe(dev->udev, 0x81), csw, US_BULK_CS_WRAP_LEN);
+	
 	if (ret) {
-		printk(KERN_ERR "rtl9210: failed to submit CSW URB: %d\n", ret);
+		printk(KERN_ERR "rtl9210: CSW failed: %d\n", ret);
 		goto done;
 	}
-	wait_for_completion(&dev->urb_done);
-
-	if (dev->urb_status != US_BULK_STAT_OK) {
-		printk(KERN_ERR "rtl9210: CSW failed: %d\n", dev->urb_status);
-		ret = dev->urb_status;
-		goto done;
-	}
-
 	printk(KERN_INFO "rtl9210: CSW Signature=0x%02x\n", csw->Signature);
 	printk(KERN_INFO "rtl9210: CSW Tag      =0x%02x\n", csw->Tag);
 	printk(KERN_INFO "rtl9210: CSW Residue  =0x%02x\n", csw->Residue);
@@ -202,7 +187,8 @@ static const struct usb_device_id rtl9210_table[] = {
 MODULE_DEVICE_TABLE(usb, rtl9210_table);
 
 /* struct usb_interface - what usb device drivers talk to */
-static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id *id) {
+static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id *id) 
+{
 	struct usb_device *udev;
 	struct rtl9210_dev *dev;
 	u8 protocol;
@@ -269,7 +255,8 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	return 0;
 }
 
-static void rtl9210_disconnect(struct usb_interface *intf) {
+static void rtl9210_disconnect(struct usb_interface *intf) 
+{
 	struct rtl9210_dev *dev = usb_get_intfdata(intf);
 	
 	usb_set_intfdata(intf, NULL);
