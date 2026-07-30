@@ -91,8 +91,6 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 		return -ENOMEM;
 	}
 
-	printk(KERN_INFO "sizeof(*csw)=%d\n", sizeof(*csw));
-
 	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
     cbw->Tag 				= 1;
 	cbw->DataTransferLength = cpu_to_le32(INQUIRY_REPLY_LEN);
@@ -181,8 +179,7 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev) {
 	ret = 0;
 
 done:
-//	rtl9210_bot_reset_recovery(dev);
-	
+//	rtl9210_bot_reset_recovery(dev);	
 	kfree(cbw);
 	kfree(data_buf);
 	kfree(csw);
