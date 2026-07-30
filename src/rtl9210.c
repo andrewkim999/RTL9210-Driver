@@ -7,7 +7,9 @@
 #define RTL_PRODUCT_ID	0x9210
 #define USB_PR_BULK		0x50
 #define USB_PR_UAS		0x62
-#define INQUIRY_REPLY_LEN 96
+
+#define SEND_INQUIRY_REPLY_LEN  96
+#define READ_CAPACITY_REPLY_LEN 8
 
 /* stores per device state */
 struct rtl9210_dev {
@@ -100,7 +102,7 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev)
 	if (!cbw)
 		return -ENOMEM;
 
-	data_buf = kzalloc(INQUIRY_REPLY_LEN, GFP_KERNEL);
+	data_buf = kzalloc(SEND_INQUIRY_REPLY_LEN, GFP_KERNEL);
 	if (!data_buf) {
 		kfree(cbw);
 		return -ENOMEM;
@@ -115,34 +117,34 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev)
 
 	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
     cbw->Tag 				= 1;
-	cbw->DataTransferLength = cpu_to_le32(INQUIRY_REPLY_LEN);
+	cbw->DataTransferLength = cpu_to_le32(SEND_INQUIRY_REPLY_LEN);
 	cbw->Flags 				= 0x80;	// data IN (device -> host)
 	cbw->Lun 				= 0;
 	cbw->Length 			= 6;	// INQUIRY CDB is 6 bytes
 	cbw->CDB[0] 			= 0x12;	// INQUIRY opcode
-	cbw->CDB[4] 			= INQUIRY_REPLY_LEN;
+	cbw->CDB[4] 			= SEND_INQUIRY_REPLY_LEN;
 
 //	rtl9210_bot_reset_recovery(dev);
 
 	/* phase 1: send CBW */
 	ret = rtl9210_bulk_transfer(dev, dev->bulk_out_urb, 
 			usb_sndbulkpipe(dev->udev, 0x02), cbw, US_BULK_CB_WRAP_LEN);
-	
 	if (ret) {
-		printk(KERN_ERR "rtl9210: CBW failed: %d\n", ret);
+		printk(KERN_ERR "rtl9210: SEND INQUIRY CBW failed: %d\n", ret);
 		goto done;
 	}
-	printk(KERN_INFO "rtl9210: CBW sent\n");
+
+	printk(KERN_INFO "rtl9210: SEND INQUIRY CBW sent\n");
 
 	/* phase 2: receive data */
 	//usb_clear_halt(dev->udev, usb_rcvbulkpipe(dev->udev, 0x81));
 	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb, 
-			usb_rcvbulkpipe(dev->udev, 0x81), data_buf, INQUIRY_REPLY_LEN);
-	
+			usb_rcvbulkpipe(dev->udev, 0x81), data_buf, SEND_INQUIRY_REPLY_LEN);
 	if (ret) {
-		printk(KERN_ERR "rtl9210: data failed: %d\n", ret);
+		printk(KERN_ERR "rtl9210: SEND INQUIRY data failed: %d\n", ret);
 		goto done;
 	}
+
 	printk(KERN_INFO "rtl9210: INQUIRY response received\n");
 	printk(KERN_INFO "rtl9210: vendor:   %.8s\n",  &data_buf[8]);
 	printk(KERN_INFO "rtl9210: product:  %.16s\n", &data_buf[16]);
@@ -151,20 +153,107 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev)
 	/* phase 3: receive CSW */
 	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb, 
 			usb_rcvbulkpipe(dev->udev, 0x81), csw, US_BULK_CS_WRAP_LEN);
-	
 	if (ret) {
-		printk(KERN_ERR "rtl9210: CSW failed: %d\n", ret);
+		printk(KERN_ERR "rtl9210: SEND INQUIRY CSW failed: %d\n", ret);
 		goto done;
 	}
-	printk(KERN_INFO "rtl9210: CSW Signature=0x%02x\n", csw->Signature);
-	printk(KERN_INFO "rtl9210: CSW Tag      =0x%02x\n", csw->Tag);
-	printk(KERN_INFO "rtl9210: CSW Residue  =0x%02x\n", csw->Residue);
-	printk(KERN_INFO "rtl9210: CSW status   =0x%02x\n", csw->Status);
+
+	if (cbw->Tag != csw->Tag) {
+		printk(KERN_ERR "rtl9210: CSW tag mismatch: expected %u, got %u\n", 
+				cbw->Tag, csw->Tag);
+		ret = -EIO;
+		goto done;
+	}
+
+	printk(KERN_INFO "rtl9210: SEND INQUIRY CSW received\n");
+
+	ret = 0;
+done:
+//	rtl9210_bot_reset_recovery(dev);	
+	kfree(cbw);
+	kfree(data_buf);
+	kfree(csw);
+	return ret;
+}
+
+static int rtl9210_read_capacity(struct rtl9210_dev *dev, u32 *max_lba, u32 *block_size) 
+{
+	struct bulk_cb_wrap *cbw;
+	struct bulk_cs_wrap *csw;
+	__u8 *data_buf;
+	int ret;
+
+	cbw = kzalloc(sizeof(struct bulk_cb_wrap), GFP_KERNEL);
+	if (!cbw)
+		return -ENOMEM;
+
+	data_buf = kzalloc(READ_CAPACITY_REPLY_LEN, GFP_KERNEL);
+	if (!data_buf) {
+		kfree(cbw);
+		return -ENOMEM;
+	}
+
+	csw = kzalloc(sizeof(struct bulk_cs_wrap), GFP_KERNEL);
+	if (!csw) {
+		kfree(cbw);
+		kfree(data_buf);
+		return -ENOMEM;
+	}
+
+	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
+    cbw->Tag 				= 2;
+	cbw->DataTransferLength = cpu_to_le32(READ_CAPACITY_REPLY_LEN);
+	cbw->Flags 				= 0x80;	// data IN (device -> host)
+	cbw->Lun 				= 0;
+	cbw->Length 			= 10;	// READ CAPACITY(10) CDB is 10 bytes
+	cbw->CDB[0] 			= 0x25;	// READ CAPACITY(10) opcode
+
+	/* phase 1: send CBW */
+	ret = rtl9210_bulk_transfer(dev, dev->bulk_out_urb, 
+			usb_sndbulkpipe(dev->udev, 0x02), cbw, US_BULK_CB_WRAP_LEN);	
+	if (ret) {
+		printk(KERN_ERR "rtl9210: READ CAPACITY CBW failed: %d\n", ret);
+		goto done;
+	}
+
+	printk(KERN_INFO "rtl9210: READ CAPACITY CBW sent\n");
+
+	/* phase 2: receive data */
+	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb, 
+			usb_rcvbulkpipe(dev->udev, 0x81), data_buf, READ_CAPACITY_REPLY_LEN);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: READ CAPACITY data failed: %d\n", ret);
+		goto done;
+	}
+
+	*max_lba    = be32_to_cpu(*(__be32 *)&data_buf[0]);
+	*block_size = be32_to_cpu(*(__be32 *)&data_buf[4]);
+	
+	printk(KERN_INFO "rtl9210: max LBA=%u, block size=%u bytes\n",
+			*max_lba, *block_size);
+	printk(KERN_INFO "rtl9210: capacity=%llu bytes\n",
+			((u64)(*max_lba) + 1) * (*block_size));
+
+	/* phase 3: receive CSW */
+	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb, 
+			usb_rcvbulkpipe(dev->udev, 0x81), csw, US_BULK_CS_WRAP_LEN);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: READ CAPACITY CSW failed: %d\n", ret);
+		goto done;
+	}
+
+	if (cbw->Tag != csw->Tag) {
+		printk(KERN_ERR "rtl9210: CSW tag mismatch: expected %u, got %u\n", 
+				cbw->Tag, csw->Tag);
+		ret = -EIO;
+		goto done;
+	}
+
+	printk(KERN_INFO "rtl9210: READ CAPACITY CSW received\n");
 
 	ret = 0;
 
 done:
-//	rtl9210_bot_reset_recovery(dev);	
 	kfree(cbw);
 	kfree(data_buf);
 	kfree(csw);
@@ -251,6 +340,11 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	ret = rtl9210_send_inquiry(dev);
 	if (ret)
 		printk(KERN_ERR "rtl9210: inquiry failed: %d\n", ret);
+
+	u32 max_lba, block_size;
+	ret = rtl9210_read_capacity(dev, &max_lba, &block_size);
+	if (ret)
+		printk(KERN_ERR "rtl9210: read capacity failed: %d\n", ret);
 
 	return 0;
 }
