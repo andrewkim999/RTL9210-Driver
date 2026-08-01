@@ -10,8 +10,9 @@ capacity = (max LBA + 1) * (block size)
 In my case I used a 1 TB SSD, so we can double check if the capacity matches.
 
 After sending our READ CAPACITY(10), our response reads:
-max LBA=1953525167, block size=512 bytes
+max LBA=1953525167, block size=512 bytes 
 capacity=1000204886016 bytes
 
-1000204886016/(1000^3) = 1.0002 TB in decimal
+which equates to:
+1000204886016/(1000^3) = 1.0002 TB in decimal 
 1000204886016/(1024^3) = 931.5 GB in binary
