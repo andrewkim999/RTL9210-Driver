@@ -6,7 +6,6 @@ Below is the hardware descriptor information. For the full length copy, check ou
 
 Hardware
 ========
-
 Device Descriptor
 -----------------
 * USB Type: 3.20
@@ -33,7 +32,6 @@ Endpoint Descriptors (BOT Mode)
 
 Software
 ========
-
 Linux Distribution
 ------------------
 * Distributor ID: Ubuntu
