@@ -10,7 +10,6 @@
 
 #define INQUIRY_REPLY_LEN       96
 #define READ_CAPACITY_REPLY_LEN 8
-#define READ_REPLY_LENGTH       512
 
 /* stores per device state */
 struct rtl9210_dev {
@@ -445,11 +444,19 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 		printk(KERN_ERR "rtl9210: READ CAPACITY(10) failed: %d\n", ret);
 	
 	u32 block_address = 0;
-	u32 num_blocks    = 5;
-	u32 *data;
+	u32 num_blocks    = 1;
+	void *data = kzalloc(num_blocks * block_size, GFP_KERNEL);
+	if (!data) {
+		printk(KERN_ERR "rtl9210: failed to allocate read buffer\n");
+		return -ENOMEM;
+	}
+
 	ret = rtl9210_read(dev, max_lba, block_size, block_address, num_blocks, data);
 	if (ret)
 		printk(KERN_ERR "rtl9210: READ(10) failed: %d\n", ret);
+
+	print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
+			16, 1, data, num_blocks * block_size, true);
 
 	return 0;
 }
