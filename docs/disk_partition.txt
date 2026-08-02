@@ -1,0 +1,10 @@
+Disk /dev/sde: 931.51 GiB, 1000204886016 bytes, 1953525168 sectors
+Disk model: RTL9210 NVME
+Units: sectors of 1 * 512 = 512 bytes
+Sector size (logical/physical): 512 bytes / 512 bytes
+I/O size (minimum/optimal): 512 bytes / 512 bytes
+Disklabel type: dos
+Disk identifier: 0x13ee8a51
+
+Device     Boot Start        End    Sectors   Size Id Type
+/dev/sde1       16384 1953519615 1953503232 931.5G  7 HPFS/NTFS/exFAT
