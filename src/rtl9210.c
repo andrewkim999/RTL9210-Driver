@@ -447,16 +447,75 @@ static int rtl9210_write(struct rtl9210_dev *dev, u32 max_lba, u32 block_size,
 	}
 
 	printk(KERN_INFO "rtl9210: WRITE(10) CSW received\n");
-
-	print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
-			16, 1, data, num_blocks * block_size, true);
-
+	
 	ret = 0;
 
 done:
 	kfree(cbw);
 	kfree(data_buf);
 	kfree(csw);
+	return ret;
+}
+
+static int rtl9210_write_test(struct rtl9210_dev *dev, 
+		u32 max_lba, u32 block_size, u32 block_address, u32 num_blocks)
+{
+	void *original, *data, *expected;
+	size_t len;
+	int ret;
+
+	len = num_blocks * block_size;
+
+	original = kzalloc(len, GFP_KERNEL);	
+	data     = kzalloc(len, GFP_KERNEL);
+	expected = kzalloc(len, GFP_KERNEL);
+
+	if (!original || !data || !expected) {	
+		ret = -ENOMEM;
+		goto done;	
+	}
+
+	/* read and store original data */
+	ret = rtl9210_read(dev, max_lba, block_size, block_address, num_blocks, original);
+	if (ret) goto done;
+
+	/* test write function: magic number 5a */
+	memset(data, 'Z', len);
+	ret = rtl9210_write(dev, max_lba, block_size, block_address, num_blocks, data);
+	if (ret) goto done;
+
+	/* verify data written */
+	ret = rtl9210_read(dev, max_lba, block_size, block_address, num_blocks, data);
+	if (ret) goto done;
+	
+	memset(expected, 'Z', len);
+	if (memcmp(data, expected, len)) {
+		printk(KERN_INFO "rtl9210: failed to write correct data\n");
+		ret = -EIO;
+		goto done;
+	}
+
+	/* restore original data */
+	ret = rtl9210_write(dev, max_lba, block_size, block_address, num_blocks, original);
+	if (ret) goto done;
+	
+	/* verify original data */
+	ret = rtl9210_read(dev, max_lba, block_size, block_address, num_blocks, data);
+	if (ret) goto done;
+	
+	if (memcmp(data, original, len)) {
+		printk(KERN_ERR "rtl9210: failed to restore original data\n");	
+		ret = -EIO;
+		goto done;
+	}
+
+	printk(KERN_INFO "rtl9210: write test passed\n");
+	ret = 0;
+
+done:
+	kfree(original);
+	kfree(data);
+	kfree(expected);
 	return ret;
 }
 
@@ -549,22 +608,22 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	u32 block_address, num_blocks;
 	void *data;
 	
-	block_address = 17000;
+	/*
+	block_address = 0;
 	num_blocks    = 1;
 	data = kzalloc(num_blocks * block_size, GFP_KERNEL);
-	if (!data) {
-		printk(KERN_ERR "rtl9210: failed to allocate read buffer\n");
-		kfree(dev);
-		return -ENOMEM;
+	if (data) {
+		ret = rtl9210_read(dev, max_lba, block_size, block_address, num_blocks, data);
+		if (ret)
+			printk(KERN_ERR "rtl9210: READ(10) failed: %d\n", ret);
 	}
-
-	ret = rtl9210_read(dev, max_lba, block_size, block_address, num_blocks, data);
-	if (ret)
-		printk(KERN_ERR "rtl9210: READ(10) failed: %d\n", ret);
-
-	block_address = 17000;
-	memset(data, '\0', block_size);
-	ret = rtl9210_write(dev, max_lba, block_size, block_address, num_blocks, data);
+	else
+		printk(KERN_ERR "rtl9210: failed to allocate read buffer\n");
+	*/
+	
+	block_address = 1953519615;
+	num_blocks = 1;
+	ret = rtl9210_write_test(dev, max_lba, block_size, block_address, num_blocks);
 	
 	return ret;
 }
