@@ -348,6 +348,109 @@ static int rtl9210_read(struct rtl9210_dev *dev, u32 max_lba, u32 block_size,
 
 	printk(KERN_INFO "rtl9210: READ(10) CSW received\n");
 
+	print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
+			16, 1, data, num_blocks * block_size, true);
+
+	ret = 0;
+
+done:
+	kfree(cbw);
+	kfree(data_buf);
+	kfree(csw);
+	return ret;
+}
+
+static int rtl9210_write(struct rtl9210_dev *dev, u32 max_lba, u32 block_size,
+		u32 block_address, u32 num_blocks, void *data)
+{
+	struct bulk_cb_wrap *cbw;
+	struct bulk_cs_wrap *csw;
+	__u8 *data_buf;
+	u32 transfer_length;
+	int ret;
+
+	transfer_length = num_blocks * block_size;
+
+	if (block_address < 16384 || (u64)block_address + num_blocks > max_lba + 1) {
+		printk(KERN_ERR "rtl9210: WRITE(10) request out of range\n");
+		return -EINVAL;
+	}
+
+	cbw = kzalloc(sizeof(struct bulk_cb_wrap), GFP_KERNEL);
+	if (!cbw)
+		return -ENOMEM;
+
+	data_buf = kzalloc(transfer_length, GFP_KERNEL);
+	if (!data_buf) {
+		kfree(cbw);
+		return -ENOMEM;
+	}
+
+	csw = kzalloc(sizeof(struct bulk_cs_wrap), GFP_KERNEL);
+	if (!csw) {
+		kfree(cbw);
+		kfree(data_buf);
+		return -ENOMEM;
+	}
+
+	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
+    cbw->Tag 				= 4;
+	cbw->DataTransferLength = cpu_to_le32(transfer_length);
+	cbw->Flags 				= 0x00;	// data OUT (host -> device)
+	cbw->Lun 				= 0;
+	cbw->Length 			= 10;	// WRITE(10) CDB is 10 bytes
+	cbw->CDB[0] 			= 0x2a;	// WRITE(10) opcode
+	
+	cbw->CDB[2]				= (block_address >> 24) & 0xff;
+	cbw->CDB[3]				= (block_address >> 16) & 0xff;
+	cbw->CDB[4]				= (block_address >> 8)  & 0xff;
+	cbw->CDB[5]				= block_address & 0xff;
+
+	cbw->CDB[7]				= (num_blocks >> 8) & 0xff;
+	cbw->CDB[8]				= num_blocks & 0xff;
+
+	/* phase 1: send CBW */
+	ret = rtl9210_bulk_transfer(dev, dev->bulk_out_urb, 
+			usb_sndbulkpipe(dev->udev, 0x02), cbw, US_BULK_CB_WRAP_LEN);	
+	if (ret) {
+		printk(KERN_ERR "rtl9210: WRITE(10) CBW failed: %d\n", ret);
+		goto done;
+	}
+
+	printk(KERN_INFO "rtl9210: WRITE(10) CBW sent\n");
+
+	/* phase 2: send data */
+	memcpy(data_buf, data, transfer_length);
+
+	ret = rtl9210_bulk_transfer(dev, dev->bulk_out_urb, 
+			usb_sndbulkpipe(dev->udev, 0x02), data_buf, transfer_length);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: WRITE(10) data failed: %d\n", ret);
+		goto done;
+	}
+
+	printk(KERN_INFO "rtl9210: WRITE(10) data received\n");
+
+	/* phase 3: receive CSW */
+	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb, 
+			usb_rcvbulkpipe(dev->udev, 0x81), csw, US_BULK_CS_WRAP_LEN);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: WRITE(10) CSW failed: %d\n", ret);
+		goto done;
+	}
+
+	if (cbw->Tag != csw->Tag) {
+		printk(KERN_ERR "rtl9210: CSW tag mismatch: expected %u, got %u\n", 
+				cbw->Tag, csw->Tag);
+		ret = -EIO;
+		goto done;
+	}
+
+	printk(KERN_INFO "rtl9210: WRITE(10) CSW received\n");
+
+	print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
+			16, 1, data, num_blocks * block_size, true);
+
 	ret = 0;
 
 done:
@@ -443,11 +546,15 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	if (ret)
 		printk(KERN_ERR "rtl9210: READ CAPACITY(10) failed: %d\n", ret);
 	
-	u32 block_address = 0;
-	u32 num_blocks    = 1;
-	void *data = kzalloc(num_blocks * block_size, GFP_KERNEL);
+	u32 block_address, num_blocks;
+	void *data;
+	
+	block_address = 17000;
+	num_blocks    = 1;
+	data = kzalloc(num_blocks * block_size, GFP_KERNEL);
 	if (!data) {
 		printk(KERN_ERR "rtl9210: failed to allocate read buffer\n");
+		kfree(dev);
 		return -ENOMEM;
 	}
 
@@ -455,10 +562,11 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	if (ret)
 		printk(KERN_ERR "rtl9210: READ(10) failed: %d\n", ret);
 
-	print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
-			16, 1, data, num_blocks * block_size, true);
-
-	return 0;
+	block_address = 17000;
+	memset(data, '\0', block_size);
+	ret = rtl9210_write(dev, max_lba, block_size, block_address, num_blocks, data);
+	
+	return ret;
 }
 
 static void rtl9210_disconnect(struct usb_interface *intf) 
