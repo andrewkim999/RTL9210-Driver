@@ -540,6 +540,7 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	struct usb_device *udev;
 	struct rtl9210_dev *dev;
 	u8 protocol;
+	u32 max_lba, block_size;
 	int ret;
 
 	udev = interface_to_usbdev(intf);
@@ -596,36 +597,21 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	/* source: linux kernel usb.h */
 	usb_set_intfdata(intf, dev);
 
+	/* informational only, not fatal to probe */
 	ret = rtl9210_send_inquiry(dev);
 	if (ret)
 		printk(KERN_ERR "rtl9210: INQUIRY failed: %d\n", ret);
 
-	u32 max_lba, block_size;
 	ret = rtl9210_read_capacity(dev, &max_lba, &block_size);
 	if (ret)
 		printk(KERN_ERR "rtl9210: READ CAPACITY(10) failed: %d\n", ret);
-	
-	u32 block_address, num_blocks;
-	void *data;
-	
-	/*
-	block_address = 0;
-	num_blocks    = 1;
-	data = kzalloc(num_blocks * block_size, GFP_KERNEL);
-	if (data) {
-		ret = rtl9210_read(dev, max_lba, block_size, block_address, num_blocks, data);
-		if (ret)
-			printk(KERN_ERR "rtl9210: READ(10) failed: %d\n", ret);
-	}
 	else
-		printk(KERN_ERR "rtl9210: failed to allocate read buffer\n");
-	*/
+		ret = rtl9210_write_test(dev, max_lba, block_size, 1953519615, 1);
 	
-	block_address = 1953519615;
-	num_blocks = 1;
-	ret = rtl9210_write_test(dev, max_lba, block_size, block_address, num_blocks);
-	
-	return ret;
+	if (ret)
+		printk(KERN_ERR "rtl9210: write test failed: %d\n", ret);
+
+	return 0;
 }
 
 static void rtl9210_disconnect(struct usb_interface *intf) 
