@@ -2,6 +2,8 @@
 #include <linux/usb.h>
 #include <linux/usb/uas.h>
 #include <linux/usb/storage.h>
+
+#include <scsi/scsi_proto.h>
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_cmnd.h>
 
@@ -121,10 +123,10 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev)
 	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
     cbw->Tag 				= 1;
 	cbw->DataTransferLength = cpu_to_le32(INQUIRY_REPLY_LEN);
-	cbw->Flags 				= 0x80;	// data IN (device -> host)
+	cbw->Flags 				= 0x80;		// data IN (device -> host)
 	cbw->Lun 				= 0;
-	cbw->Length 			= 6;	// INQUIRY CDB is 6 bytes
-	cbw->CDB[0] 			= 0x12;	// INQUIRY opcode
+	cbw->Length 			= 6;		// INQUIRY CDB is 6 bytes
+	cbw->CDB[0] 			= INQUIRY;	// INQUIRY opcode
 	cbw->CDB[4] 			= INQUIRY_REPLY_LEN;
 
 //	rtl9210_bot_reset_recovery(dev);
@@ -206,10 +208,10 @@ static int rtl9210_read_capacity(struct rtl9210_dev *dev, u32 *max_lba, u32 *blo
 	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
     cbw->Tag 				= 2;
 	cbw->DataTransferLength = cpu_to_le32(READ_CAPACITY_REPLY_LEN);
-	cbw->Flags 				= 0x80;	// data IN (device -> host)
+	cbw->Flags 				= 0x80;				// data IN (device -> host)
 	cbw->Lun 				= 0;
-	cbw->Length 			= 10;	// READ CAPACITY(10) CDB is 10 bytes
-	cbw->CDB[0] 			= 0x25;	// READ CAPACITY(10) opcode
+	cbw->Length 			= 10;				// READ CAPACITY(10) CDB is 10 bytes
+	cbw->CDB[0] 			= READ_CAPACITY;	// READ CAPACITY(10) opcode
 
 	/* phase 1: send CBW */
 	ret = rtl9210_bulk_transfer(dev, dev->bulk_out_urb, 
@@ -299,10 +301,10 @@ static int rtl9210_read(struct rtl9210_dev *dev, u32 max_lba, u32 block_size,
 	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
     cbw->Tag 				= 3;
 	cbw->DataTransferLength = cpu_to_le32(transfer_length);
-	cbw->Flags 				= 0x80;	// data IN (device -> host)
+	cbw->Flags 				= 0x80;		// data IN (device -> host)
 	cbw->Lun 				= 0;
-	cbw->Length 			= 10;	// READ(10) CDB is 10 bytes
-	cbw->CDB[0] 			= 0x28;	// READ(10) opcode
+	cbw->Length 			= 10;		// READ(10) CDB is 10 bytes
+	cbw->CDB[0] 			= READ_10;	// READ(10) opcode
 	
 	cbw->CDB[2]				= (block_address >> 24) & 0xff;
 	cbw->CDB[3]				= (block_address >> 16) & 0xff;
@@ -399,10 +401,10 @@ static int rtl9210_write(struct rtl9210_dev *dev, u32 max_lba, u32 block_size,
 	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
     cbw->Tag 				= 4;
 	cbw->DataTransferLength = cpu_to_le32(transfer_length);
-	cbw->Flags 				= 0x00;	// data OUT (host -> device)
+	cbw->Flags 				= 0x00;		// data OUT (host -> device)
 	cbw->Lun 				= 0;
-	cbw->Length 			= 10;	// WRITE(10) CDB is 10 bytes
-	cbw->CDB[0] 			= 0x2a;	// WRITE(10) opcode
+	cbw->Length 			= 10;		// WRITE(10) CDB is 10 bytes
+	cbw->CDB[0] 			= WRITE_10;	// WRITE(10) opcode
 	
 	cbw->CDB[2]				= (block_address >> 24) & 0xff;
 	cbw->CDB[3]				= (block_address >> 16) & 0xff;
@@ -627,6 +629,7 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	scsi_scan_host(shost);
 
 	/* informational only, not fatal to probe */
+	/*
 	ret = rtl9210_send_inquiry(dev);
 	if (ret)
 		printk(KERN_ERR "rtl9210: INQUIRY failed: %d\n", ret);
@@ -640,6 +643,7 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	
 	if (ret)
 		printk(KERN_ERR "rtl9210: write test failed: %d\n", ret);
+	*/
 
 	return 0;
 
