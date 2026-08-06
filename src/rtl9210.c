@@ -15,7 +15,8 @@
 struct rtl9210_dev {
 	struct usb_device *udev;
 	struct usb_interface *intf;
-	
+	struct Scsi_Host *shost;
+
 	struct usb_host_endpoint *data_in;	// EP1 IN  0x81
 	struct usb_host_endpoint *data_out;	// EP2 OUT 0x02
 	
@@ -519,6 +520,23 @@ done:
 	return ret;
 }
 
+static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
+{
+	cmd->result = DID_ERROR << 16;
+	cmd->scsi_done(cmd);
+	return 0;
+}
+
+static struct scsi_host_template rtl9210_host_template = {
+	.module 	  = THIS_MODULE,
+	.name 		  = "rtl9210",
+	.queuecommand = rtl9210_queuecommand,
+	.this_id 	  = -1,	// no fixed host adapter ID
+	.can_queue 	  = 1,	// only 1 command in flight at a time for now
+	.sg_tablesize = SG_ALL,
+	.max_sectors  = 240,
+};
+
 /*	Array of vendor/product ID pairs my driver claims to support.
 	USB_DEVICE() is a macro that expands to fill in the struct fields.
 	{} at the end marks the end of the array. 
@@ -538,9 +556,9 @@ MODULE_DEVICE_TABLE(usb, rtl9210_table);
 static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id *id) 
 {
 	struct usb_device *udev;
+	struct Scsi_Host *shost;
 	struct rtl9210_dev *dev;
 	u8 protocol;
-	u32 max_lba, block_size;
 	int ret;
 
 	udev = interface_to_usbdev(intf);
@@ -553,12 +571,15 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	printk(KERN_INFO "rtl9210: protocol %s\n",
 		   protocol == USB_PR_UAS ? "UAS" : "Bulk-Only");
 	
-	dev = kzalloc(sizeof(struct rtl9210_dev), GFP_KERNEL);
-	if (!dev)
+	shost = scsi_host_alloc(&rtl9210_host_template, sizeof(struct rtl9210_dev));
+	if (!shost)
 		return -ENOMEM;
 
-	dev->udev = udev;
-	dev->intf = intf;
+	dev = shost_priv(shost);
+
+	dev->shost = shost;
+	dev->udev  = udev;
+	dev->intf  = intf;
 	
 	ret = rtl9210_find_endpoints(dev);
 	if (ret) {
@@ -597,11 +618,23 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	/* source: linux kernel usb.h */
 	usb_set_intfdata(intf, dev);
 
+	ret = scsi_add_host(shost, &intf->dev);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: scsi_add_host failed: %d\n", ret);
+		usb_free_urb(dev->bulk_in_urb);
+		usb_free_urb(dev->bulk_out_urb);
+		kfree(dev);
+		return -EIO;
+	}
+
+	scsi_scan_host(shost);
+
 	/* informational only, not fatal to probe */
 	ret = rtl9210_send_inquiry(dev);
 	if (ret)
 		printk(KERN_ERR "rtl9210: INQUIRY failed: %d\n", ret);
 
+	u32 max_lba, block_size;
 	ret = rtl9210_read_capacity(dev, &max_lba, &block_size);
 	if (ret)
 		printk(KERN_ERR "rtl9210: READ CAPACITY(10) failed: %d\n", ret);
@@ -612,6 +645,13 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 		printk(KERN_ERR "rtl9210: write test failed: %d\n", ret);
 
 	return 0;
+/*
+err_free:
+	usb_free_urb(dev->bulk_in_urb);
+	usb_free_urb(dev->bulk_out_urb);
+	kfree(dev);
+
+	return ret;*/
 }
 
 static void rtl9210_disconnect(struct usb_interface *intf) 
@@ -619,10 +659,12 @@ static void rtl9210_disconnect(struct usb_interface *intf)
 	struct rtl9210_dev *dev = usb_get_intfdata(intf);
 	
 	usb_set_intfdata(intf, NULL);
+	scsi_remove_host(dev->shost);
 
 	usb_free_urb(dev->bulk_in_urb);
 	usb_free_urb(dev->bulk_out_urb);
-	kfree(dev);
+
+	scsi_host_put(dev->shost);
 	
 	printk(KERN_INFO "rtl9210: device disconnected\n");
 }
