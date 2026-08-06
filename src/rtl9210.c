@@ -2,6 +2,8 @@
 #include <linux/usb.h>
 #include <linux/usb/uas.h>
 #include <linux/usb/storage.h>
+#include <scsi/scsi_host.h>
+#include <scsi/scsi_cmnd.h>
 
 #define RTL_VENDOR_ID	0x0bda
 #define RTL_PRODUCT_ID	0x9210
@@ -523,7 +525,7 @@ done:
 static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 {
 	cmd->result = DID_ERROR << 16;
-	cmd->scsi_done(cmd);
+	scsi_done(cmd);
 	return 0;
 }
 
@@ -582,24 +584,22 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	dev->intf  = intf;
 	
 	ret = rtl9210_find_endpoints(dev);
-	if (ret) {
-		kfree(dev);
-		return ret;
-	}
+	if (ret)
+		goto err_free;
+
 	printk(KERN_INFO "rtl9210: found all 2 endpoints\n");
 
 	/* allocate URBs */
 	dev->bulk_in_urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (!dev->bulk_in_urb) {
-		kfree(dev);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err_free;
 	}
 
 	dev->bulk_out_urb = usb_alloc_urb(0, GFP_KERNEL);
 	if (!dev->bulk_out_urb) {
-		usb_free_urb(dev->bulk_in_urb);
-		kfree(dev);
-		return -ENOMEM;
+		ret = -ENOMEM;
+		goto err_free;
 	}
 	
 	printk(KERN_INFO "rtl9210: URBs allocated\n");
@@ -621,10 +621,7 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	ret = scsi_add_host(shost, &intf->dev);
 	if (ret) {
 		printk(KERN_ERR "rtl9210: scsi_add_host failed: %d\n", ret);
-		usb_free_urb(dev->bulk_in_urb);
-		usb_free_urb(dev->bulk_out_urb);
-		kfree(dev);
-		return -EIO;
+		goto err_free;
 	}
 
 	scsi_scan_host(shost);
@@ -645,13 +642,13 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 		printk(KERN_ERR "rtl9210: write test failed: %d\n", ret);
 
 	return 0;
-/*
+
 err_free:
 	usb_free_urb(dev->bulk_in_urb);
 	usb_free_urb(dev->bulk_out_urb);
-	kfree(dev);
+	scsi_host_put(shost);
 
-	return ret;*/
+	return ret;
 }
 
 static void rtl9210_disconnect(struct usb_interface *intf) 
@@ -659,12 +656,12 @@ static void rtl9210_disconnect(struct usb_interface *intf)
 	struct rtl9210_dev *dev = usb_get_intfdata(intf);
 	
 	usb_set_intfdata(intf, NULL);
-	scsi_remove_host(dev->shost);
+	scsi_remove_host(dev->shost);	// unregisters from SCSI layer
 
 	usb_free_urb(dev->bulk_in_urb);
 	usb_free_urb(dev->bulk_out_urb);
 
-	scsi_host_put(dev->shost);
+	scsi_host_put(dev->shost);		// frees host allocation
 	
 	printk(KERN_INFO "rtl9210: device disconnected\n");
 }
