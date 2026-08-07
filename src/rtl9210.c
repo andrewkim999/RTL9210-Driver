@@ -79,74 +79,104 @@ static int rtl9210_bulk_transfer(struct rtl9210_dev *dev, struct urb *urb,
 
 	return dev->urb_status;
 }
-/*
-static int rtl9210_bot_reset_recovery(struct rtl9210_dev *dev) {
-	int ret;
 
-	ret = usb_control_msg(dev->udev, usb_sndctrlpipe(dev->udev, 0),
-			0xff, USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-			0, dev->intf->cur_altsetting->desc.bInterfaceNumber,
-			NULL, 0, 5000);
-	if (ret < 0)
-		printk(KERN_WARNING "rtl9210: BOT reset failed: %d\n", ret);
-
-	usb_clear_halt(dev->udev, usb_sndbulkpipe(dev->udev, 0x02));
-	usb_clear_halt(dev->udev, usb_rcvbulkpipe(dev->udev, 0x81));
-
-	return ret;
-}*/
-
-static int rtl9210_send_inquiry(struct rtl9210_dev *dev) 
+static int rtl9210_exec_cdb(struct rtl9210_dev *dev, u32 tag, u32 transfer_len, 
+		u8 direction, u8 cdb_len, u8 *cdb, void *data_buf)
 {
 	struct bulk_cb_wrap *cbw;
 	struct bulk_cs_wrap *csw;
-	__u8 *data_buf;
 	int ret;
 
 	cbw = kzalloc(sizeof(struct bulk_cb_wrap), GFP_KERNEL);
-	if (!cbw)
-		return -ENOMEM;
-
-	data_buf = kzalloc(INQUIRY_REPLY_LEN, GFP_KERNEL);
-	if (!data_buf) {
-		kfree(cbw);
-		return -ENOMEM;
+	if (!cbw) {
+		ret = -ENOMEM;
+		goto done;
 	}
 
 	csw = kzalloc(sizeof(struct bulk_cs_wrap), GFP_KERNEL);
 	if (!csw) {
-		kfree(cbw);
-		kfree(data_buf);
-		return -ENOMEM;
-	}
-
-	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
-    cbw->Tag 				= 1;
-	cbw->DataTransferLength = cpu_to_le32(INQUIRY_REPLY_LEN);
-	cbw->Flags 				= 0x80;		// data IN (device -> host)
-	cbw->Lun 				= 0;
-	cbw->Length 			= 6;		// INQUIRY CDB is 6 bytes
-	cbw->CDB[0] 			= INQUIRY;	// INQUIRY opcode
-	cbw->CDB[4] 			= INQUIRY_REPLY_LEN;
-
-//	rtl9210_bot_reset_recovery(dev);
-
-	/* phase 1: send CBW */
-	ret = rtl9210_bulk_transfer(dev, dev->bulk_out_urb, 
-			usb_sndbulkpipe(dev->udev, 0x02), cbw, US_BULK_CB_WRAP_LEN);
-	if (ret) {
-		printk(KERN_ERR "rtl9210: INQUIRY CBW failed: %d\n", ret);
+		ret = -ENOMEM;
 		goto done;
 	}
 
-	printk(KERN_INFO "rtl9210: INQUIRY CBW sent\n");
+	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);
+	cbw->Tag				= tag;
+	cbw->DataTransferLength = cpu_to_le32(transfer_len);
+	cbw->Flags 				= direction;	// data IN (0x80) or data OUT (0x00)
+	cbw->Lun 				= 0;
+	cbw->Length 			= cdb_len;
+	
+	for (int i = 0; i < cdb_len; i++) 
+		cbw->CDB[i] = cdb[i];
 
-	/* phase 2: receive data */
-	//usb_clear_halt(dev->udev, usb_rcvbulkpipe(dev->udev, 0x81));
-	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb, 
-			usb_rcvbulkpipe(dev->udev, 0x81), data_buf, INQUIRY_REPLY_LEN);
+	/* phase 1: send CBW */
+	ret = rtl9210_bulk_transfer(dev, dev->bulk_out_urb,
+			usb_sndbulkpipe(dev->udev, 0x02), cbw, US_BULK_CB_WRAP_LEN);
 	if (ret) {
-		printk(KERN_ERR "rtl9210: INQUIRY data failed: %d\n", ret);
+		printk(KERN_ERR "rtl9210: CBW failed: %d\n", ret);
+		goto done;
+	}
+
+	/* phase 2: receive or send data */
+	if (direction)
+		ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb,
+				usb_rcvbulkpipe(dev->udev, 0x81), data_buf, transfer_len);
+	else
+		ret = rtl9210_bulk_transfer(dev, dev->bulk_out_urb,
+				usb_sndbulkpipe(dev->udev, 0x02), data_buf, transfer_len);
+
+	if (ret) {
+		printk(KERN_ERR "rtl9210: data failed: %d\n", ret);
+		goto done;
+	}
+
+	/* phase 3: receive CSW */
+	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb,
+			usb_rcvbulkpipe(dev->udev, 0x81), csw, US_BULK_CS_WRAP_LEN);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: CSW failed: %d\n", ret);
+		goto done;
+	}
+
+	if (cbw->Tag != csw->Tag) {
+		printk(KERN_ERR "rtl9210: CSW tag mismatch: expected %u, got %u\n",
+				cbw->Tag, csw->Tag);
+		ret = -EIO;
+		goto done;
+	}
+
+	ret = 0;
+
+done:
+	kfree(cbw);
+	kfree(csw);
+
+	return ret;
+}
+
+static int rtl9210_send_inquiry(struct rtl9210_dev *dev) 
+{
+	u8 *data_buf, *cdb;
+	int ret;
+	
+	data_buf = kzalloc(INQUIRY_REPLY_LEN, GFP_KERNEL);
+	if (!data_buf) {
+		ret = -ENOMEM;
+		goto done;
+	}
+
+	cdb = kzalloc(6, GFP_KERNEL);
+	if (!cdb) {
+		ret = -ENOMEM;
+		goto done;
+	}
+
+	cdb[0] = INQUIRY;
+	cdb[4] = INQUIRY_REPLY_LEN;
+
+	ret = rtl9210_exec_cdb(dev, 1, INQUIRY_REPLY_LEN, US_BULK_FLAG_IN, 6, cdb, data_buf);
+	if (ret) {
+		printk(KERN_ERR "rtl9210: INQUIRY failed: %d\n", ret);
 		goto done;
 	}
 
@@ -154,30 +184,13 @@ static int rtl9210_send_inquiry(struct rtl9210_dev *dev)
 	printk(KERN_INFO "rtl9210: vendor:   %.8s\n",  &data_buf[8]);
 	printk(KERN_INFO "rtl9210: product:  %.16s\n", &data_buf[16]);
 	printk(KERN_INFO "rtl9210: revision: %.4s\n",  &data_buf[32]);
-	
-	/* phase 3: receive CSW */
-	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb, 
-			usb_rcvbulkpipe(dev->udev, 0x81), csw, US_BULK_CS_WRAP_LEN);
-	if (ret) {
-		printk(KERN_ERR "rtl9210: INQUIRY CSW failed: %d\n", ret);
-		goto done;
-	}
-
-	if (cbw->Tag != csw->Tag) {
-		printk(KERN_ERR "rtl9210: CSW tag mismatch: expected %u, got %u\n", 
-				cbw->Tag, csw->Tag);
-		ret = -EIO;
-		goto done;
-	}
-
-	printk(KERN_INFO "rtl9210: INQUIRY CSW received\n");
 
 	ret = 0;
+
 done:
-//	rtl9210_bot_reset_recovery(dev);	
-	kfree(cbw);
 	kfree(data_buf);
-	kfree(csw);
+	kfree(cdb);
+
 	return ret;
 }
 
@@ -526,9 +539,46 @@ done:
 
 static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 {
-	cmd->result = DID_ERROR << 16;
-	scsi_done(cmd);
-	return 0;
+	struct rtl9210_dev *dev = shost_priv(shost);
+	u8 opcode = cmd->cmnd[0];
+	int ret;
+
+	if (cmd->device->id != 0 || cmd->device->lun != 0) {
+		cmd->result = DID_NO_CONNECT << 16;
+		scsi_done(cmd);
+		return 0;
+	}
+
+	switch(opcode) {
+	case TEST_UNIT_READY:
+		cmd->result = DID_OK << 16;
+		scsi_done(cmd);
+		ret = 0;
+		break;
+	case INQUIRY:
+		//ret = rtl9210_scsi_inquiry(dev, cmd);
+		cmd->result = DID_OK << 16;
+		scsi_done(cmd);
+		ret = 0;
+		break;
+	/*
+	case READ_CAPACITY:
+		ret = rtl9210_scsi_read_capacity(dev, cmd);
+		break;
+	case READ_10:
+		ret = rtl9210_scsi_read(dev, cmd);
+		break;
+	case WRITE_10:
+		ret = rtl9210_scsi_write(dev, cmd);
+		break;
+	*/
+	default:
+		printk(KERN_WARNING "rtl9210: unhandled opcode 0x%02x\n", opcode);
+		cmd->result = DID_OK << 16;
+		scsi_done(cmd);
+	}
+
+	return ret;
 }
 
 static struct scsi_host_template rtl9210_host_template = {
@@ -579,6 +629,9 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	if (!shost)
 		return -ENOMEM;
 
+	shost->max_id  = 1;
+	shost->max_lun = 1;
+	
 	dev = shost_priv(shost);
 
 	dev->shost = shost;
@@ -629,11 +682,10 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	scsi_scan_host(shost);
 
 	/* informational only, not fatal to probe */
-	/*
 	ret = rtl9210_send_inquiry(dev);
 	if (ret)
 		printk(KERN_ERR "rtl9210: INQUIRY failed: %d\n", ret);
-
+/*
 	u32 max_lba, block_size;
 	ret = rtl9210_read_capacity(dev, &max_lba, &block_size);
 	if (ret)
@@ -643,8 +695,7 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	
 	if (ret)
 		printk(KERN_ERR "rtl9210: write test failed: %d\n", ret);
-	*/
-
+*/
 	return 0;
 
 err_free:
