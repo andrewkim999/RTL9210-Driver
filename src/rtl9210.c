@@ -2,6 +2,7 @@
 #include <linux/usb.h>
 #include <linux/usb/uas.h>
 #include <linux/usb/storage.h>
+#include <linux/mutex.h>
 
 #include <scsi/scsi_proto.h>
 #include <scsi/scsi_host.h>
@@ -29,6 +30,8 @@ struct rtl9210_dev {
 
 	struct completion urb_done;
 	int urb_status;
+
+	struct mutex transport_lock;
 };
 
 /* endpoint parsing function */
@@ -83,10 +86,12 @@ static int rtl9210_bulk_transfer(struct rtl9210_dev *dev, struct urb *urb,
 static int rtl9210_exec_cdb(struct rtl9210_dev *dev, u32 tag, u32 transfer_len, 
 		u8 direction, u8 cdb_len, u8 *cdb, void *data_buf)
 {
-	struct bulk_cb_wrap *cbw;
-	struct bulk_cs_wrap *csw;
+	struct bulk_cb_wrap *cbw = NULL;
+	struct bulk_cs_wrap *csw = NULL;
 	int ret;
 
+//	mutex_lock(&dev->transport_lock);
+	
 	cbw = kzalloc(sizeof(struct bulk_cb_wrap), GFP_KERNEL);
 	if (!cbw) {
 		ret = -ENOMEM;
@@ -150,51 +155,50 @@ static int rtl9210_exec_cdb(struct rtl9210_dev *dev, u32 tag, u32 transfer_len,
 done:
 	kfree(cbw);
 	kfree(csw);
+//	mutex_unlock(&dev->transport_lock);
 
 	return ret;
 }
 
-static int rtl9210_send_inquiry(struct rtl9210_dev *dev) 
+static int rtl9210_scsi_inquiry(struct rtl9210_dev *dev, struct scsi_cmnd *cmd) 
 {
-	u8 *data_buf, *cdb;
+	u8 *data_buf;
+	u8 direction;
+	u32 len, tag;
 	int ret;
+
+	len = scsi_bufflen(cmd);
+	tag = scsi_cmd_to_rq(cmd)->tag;
 	
-	data_buf = kzalloc(INQUIRY_REPLY_LEN, GFP_KERNEL);
-	if (!data_buf) {
-		ret = -ENOMEM;
-		goto done;
+	data_buf = kzalloc(len, GFP_KERNEL);
+	if (!data_buf)
+		return -ENOMEM;
+
+	len = scsi_bufflen(cmd);
+	
+	direction = (cmd->sc_data_direction == DMA_TO_DEVICE) ? US_BULK_FLAG_OUT : US_BULK_FLAG_IN;
+
+	ret = rtl9210_exec_cdb(dev, tag, len, direction, 
+			cmd->cmd_len, cmd->cmnd, data_buf);
+	if (!ret) {
+		sg_copy_from_buffer(scsi_sglist(cmd), scsi_sg_count(cmd), data_buf, len);
+		
+		if (!(cmd->cmnd[1] & 0x01)) {
+			printk(KERN_INFO "rtl9210: INQUIRY response received\n");
+			printk(KERN_INFO "rtl9210: vendor:   %.8s\n",  &data_buf[8]);
+			printk(KERN_INFO "rtl9210: product:  %.16s\n", &data_buf[16]);
+			printk(KERN_INFO "rtl9210: revision: %.4s\n",  &data_buf[32]);
+		} else {
+			printk(KERN_INFO "rtl9210: VPD page 0x%02x requested (len=%u)\n", 
+					cmd->cmnd[2], len);
+		}
 	}
 
-	cdb = kzalloc(6, GFP_KERNEL);
-	if (!cdb) {
-		ret = -ENOMEM;
-		goto done;
-	}
-
-	cdb[0] = INQUIRY;
-	cdb[4] = INQUIRY_REPLY_LEN;
-
-	ret = rtl9210_exec_cdb(dev, 1, INQUIRY_REPLY_LEN, US_BULK_FLAG_IN, 6, cdb, data_buf);
-	if (ret) {
-		printk(KERN_ERR "rtl9210: INQUIRY failed: %d\n", ret);
-		goto done;
-	}
-
-	printk(KERN_INFO "rtl9210: INQUIRY response received\n");
-	printk(KERN_INFO "rtl9210: vendor:   %.8s\n",  &data_buf[8]);
-	printk(KERN_INFO "rtl9210: product:  %.16s\n", &data_buf[16]);
-	printk(KERN_INFO "rtl9210: revision: %.4s\n",  &data_buf[32]);
-
-	ret = 0;
-
-done:
 	kfree(data_buf);
-	kfree(cdb);
-
 	return ret;
 }
 
-static int rtl9210_read_capacity(struct rtl9210_dev *dev, u32 *max_lba, u32 *block_size) 
+static int rtl9210_scsi_read_capacity(struct rtl9210_dev *dev, u32 *max_lba, u32 *block_size) 
 {
 	struct bulk_cb_wrap *cbw;
 	struct bulk_cs_wrap *csw;
@@ -556,8 +560,8 @@ static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 		ret = 0;
 		break;
 	case INQUIRY:
-		//ret = rtl9210_scsi_inquiry(dev, cmd);
-		cmd->result = DID_OK << 16;
+		ret = rtl9210_scsi_inquiry(dev, cmd);
+		cmd->result = (ret) ? DID_ERROR << 16 : DID_OK << 16;
 		scsi_done(cmd);
 		ret = 0;
 		break;
@@ -633,6 +637,7 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	shost->max_lun = 1;
 	
 	dev = shost_priv(shost);
+	mutex_init(&dev->transport_lock);
 
 	dev->shost = shost;
 	dev->udev  = udev;
@@ -682,10 +687,11 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	scsi_scan_host(shost);
 
 	/* informational only, not fatal to probe */
+/*
 	ret = rtl9210_send_inquiry(dev);
 	if (ret)
 		printk(KERN_ERR "rtl9210: INQUIRY failed: %d\n", ret);
-/*
+
 	u32 max_lba, block_size;
 	ret = rtl9210_read_capacity(dev, &max_lba, &block_size);
 	if (ret)
