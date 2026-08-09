@@ -34,19 +34,6 @@ struct rtl9210_dev {
 
 };
 
-enum rtl9210_phase { PHASE_CBW, PHASE_DATA, PHASE_CSW };
-
-struct rtl9210_cmd_priv {
-	enum rtl9210_phase phase;
-	
-	struct bulk_cb_wrap *cbw;
-	struct bulk_cs_wrap *csw;
-	
-	void *data_buf;
-	u32 len;
-	u8 direction;
-};
-
 /* endpoint parsing function */
 static int rtl9210_find_endpoints(struct rtl9210_dev *dev) 
 {
@@ -415,7 +402,6 @@ static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 }
 
 static struct scsi_host_template rtl9210_host_template = {
-	.cmd_size	  = sizeof(struct rtl9210_cmd_priv),
 	.module 	  = THIS_MODULE,
 	.name 		  = "rtl9210",
 	.queuecommand = rtl9210_queuecommand,
@@ -514,23 +500,7 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	}
 
 	scsi_scan_host(shost);
-
-	/* informational only, not fatal to probe */
-/*
-	ret = rtl9210_send_inquiry(dev);
-	if (ret)
-		printk(KERN_ERR "rtl9210: INQUIRY failed: %d\n", ret);
-
-	u32 max_lba, block_size;
-	ret = rtl9210_read_capacity(dev, &max_lba, &block_size);
-	if (ret)
-		printk(KERN_ERR "rtl9210: READ CAPACITY(10) failed: %d\n", ret);
-	else
-		ret = rtl9210_write_test(dev, max_lba, block_size, 1953519615, 1);
 	
-	if (ret)
-		printk(KERN_ERR "rtl9210: write test failed: %d\n", ret);
-*/
 	return 0;
 
 err_free:
