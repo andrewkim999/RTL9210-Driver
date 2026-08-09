@@ -16,6 +16,8 @@
 #define INQUIRY_REPLY_LEN       96
 #define READ_CAPACITY_REPLY_LEN 8
 
+static u32 max_lba, blk_size;
+
 /* stores per device state */
 struct rtl9210_dev {
 	struct usb_device *udev;
@@ -217,117 +219,56 @@ static int rtl9210_scsi_read_capacity(struct rtl9210_dev *dev, struct scsi_cmnd 
 	if (!ret) {
 		sg_copy_from_buffer(scsi_sglist(cmd), scsi_sg_count(cmd), data_buf, len);
 	
-		u32	max_lba    = be32_to_cpu(*(__be32 *)&data_buf[0]);
-		u32 block_size = be32_to_cpu(*(__be32 *)&data_buf[4]);
+		max_lba  = be32_to_cpu(*(__be32 *)&data_buf[0]);
+		blk_size = be32_to_cpu(*(__be32 *)&data_buf[4]);
 	
 		printk(KERN_INFO "rtl9210: max LBA=%u, block size=%u bytes\n",
-			max_lba, block_size);
+			max_lba, blk_size);
 		printk(KERN_INFO "rtl9210: capacity=%llu bytes\n",
-			((u64)(max_lba) + 1) * (block_size));
+			((u64)(max_lba) + 1) * (blk_size));
 	}
 	
 	kfree(data_buf);
 	return ret;
 }
 
-static int rtl9210_read(struct rtl9210_dev *dev, u32 max_lba, u32 block_size,
-		u32 block_address, u32 num_blocks, void *data) 
+static int rtl9210_scsi_read(struct rtl9210_dev *dev, struct scsi_cmnd *cmd) 
 {
-	struct bulk_cb_wrap *cbw;
-	struct bulk_cs_wrap *csw;
-	__u8 *data_buf;
-	u32 transfer_length;
+	u8 *data_buf;
+	u8 direction;
+	u32 len, tag;
 	int ret;
 
-	transfer_length = num_blocks * block_size;
+	len = scsi_bufflen(cmd);
+	tag = scsi_cmd_to_rq(cmd)->tag;
+	
+	u32 block_address = be32_to_cpu(*(__be32 *)&cmd->cmnd[2]);
+	u16 num_blocks 	  = be16_to_cpu(*(__be16 *)&cmd->cmnd[7]);
 
 	if ((u64)block_address + num_blocks > max_lba + 1) {
 		printk(KERN_ERR "rtl9210: READ(10) request out of range\n");
 		return -EINVAL;
 	}
-
-	cbw = kzalloc(sizeof(struct bulk_cb_wrap), GFP_KERNEL);
-	if (!cbw)
-		return -ENOMEM;
-
-	data_buf = kzalloc(transfer_length, GFP_KERNEL);
-	if (!data_buf) {
-		kfree(cbw);
-		return -ENOMEM;
-	}
-
-	csw = kzalloc(sizeof(struct bulk_cs_wrap), GFP_KERNEL);
-	if (!csw) {
-		kfree(cbw);
-		kfree(data_buf);
-		return -ENOMEM;
-	}
-
-	cbw->Signature 			= cpu_to_le32(US_BULK_CB_SIGN);	// 'USBC'
-    cbw->Tag 				= 3;
-	cbw->DataTransferLength = cpu_to_le32(transfer_length);
-	cbw->Flags 				= 0x80;		// data IN (device -> host)
-	cbw->Lun 				= 0;
-	cbw->Length 			= 10;		// READ(10) CDB is 10 bytes
-	cbw->CDB[0] 			= READ_10;	// READ(10) opcode
 	
-	cbw->CDB[2]				= (block_address >> 24) & 0xff;
-	cbw->CDB[3]				= (block_address >> 16) & 0xff;
-	cbw->CDB[4]				= (block_address >> 8)  & 0xff;
-	cbw->CDB[5]				= block_address & 0xff;
+	data_buf = kzalloc(len, GFP_KERNEL);
+	if (!data_buf)
+		return -ENOMEM;
 
-	cbw->CDB[7]				= (num_blocks >> 8) & 0xff;
-	cbw->CDB[8]				= num_blocks & 0xff;
+	direction = (cmd->sc_data_direction == DMA_TO_DEVICE) ? US_BULK_FLAG_OUT : US_BULK_FLAG_IN;
 
-	/* phase 1: send CBW */
-	ret = rtl9210_bulk_transfer(dev, dev->bulk_out_urb, 
-			usb_sndbulkpipe(dev->udev, 0x02), cbw, US_BULK_CB_WRAP_LEN);	
-	if (ret) {
-		printk(KERN_ERR "rtl9210: READ(10) CBW failed: %d\n", ret);
-		goto done;
+	ret = rtl9210_exec_cdb(dev, tag, len, direction,
+			cmd->cmd_len, cmd->cmnd, data_buf);
+	if (!ret) {
+		sg_copy_from_buffer(scsi_sglist(cmd), scsi_sg_count(cmd), data_buf, len);
+		
+		printk(KERN_INFO "rtl9210: %d blocks read at lba=%d\n", num_blocks, block_address);	
+		/*	uncomment to view bytes read
+		print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
+				16, 1, data_buf, num_blocks * blk_size, true);
+		*/
 	}
 
-	printk(KERN_INFO "rtl9210: READ(10) CBW sent\n");
-
-	/* phase 2: receive data */
-	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb, 
-			usb_rcvbulkpipe(dev->udev, 0x81), data_buf, transfer_length);
-	if (ret) {
-		printk(KERN_ERR "rtl9210: READ(10) data failed: %d\n", ret);
-		goto done;
-	}
-
-	memcpy(data, data_buf, transfer_length);
-
-	printk(KERN_INFO "rtl9210: READ(10) data received\n");
-
-	/* phase 3: receive CSW */
-	ret = rtl9210_bulk_transfer(dev, dev->bulk_in_urb, 
-			usb_rcvbulkpipe(dev->udev, 0x81), csw, US_BULK_CS_WRAP_LEN);
-	if (ret) {
-		printk(KERN_ERR "rtl9210: READ(10) CSW failed: %d\n", ret);
-		goto done;
-	}
-
-	if (cbw->Tag != csw->Tag) {
-		printk(KERN_ERR "rtl9210: CSW tag mismatch: expected %u, got %u\n", 
-				cbw->Tag, csw->Tag);
-		ret = -EIO;
-		goto done;
-	}
-
-	printk(KERN_INFO "rtl9210: READ(10) CSW received\n");
-
-	print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
-			16, 1, data, num_blocks * block_size, true);
-
-	ret = 0;
-
-done:
-	kfree(cbw);
-	kfree(data_buf);
-	kfree(csw);
-	return ret;
+	return 0;
 }
 
 static int rtl9210_write(struct rtl9210_dev *dev, u32 max_lba, u32 block_size,
@@ -427,68 +368,6 @@ done:
 	return ret;
 }
 
-static int rtl9210_write_test(struct rtl9210_dev *dev, 
-		u32 max_lba, u32 block_size, u32 block_address, u32 num_blocks)
-{
-	void *original, *data, *expected;
-	size_t len;
-	int ret;
-
-	len = num_blocks * block_size;
-
-	original = kzalloc(len, GFP_KERNEL);	
-	data     = kzalloc(len, GFP_KERNEL);
-	expected = kzalloc(len, GFP_KERNEL);
-
-	if (!original || !data || !expected) {	
-		ret = -ENOMEM;
-		goto done;	
-	}
-
-	/* read and store original data */
-	ret = rtl9210_read(dev, max_lba, block_size, block_address, num_blocks, original);
-	if (ret) goto done;
-
-	/* test write function: magic number 5a */
-	memset(data, 'Z', len);
-	ret = rtl9210_write(dev, max_lba, block_size, block_address, num_blocks, data);
-	if (ret) goto done;
-
-	/* verify data written */
-	ret = rtl9210_read(dev, max_lba, block_size, block_address, num_blocks, data);
-	if (ret) goto done;
-	
-	memset(expected, 'Z', len);
-	if (memcmp(data, expected, len)) {
-		printk(KERN_INFO "rtl9210: failed to write correct data\n");
-		ret = -EIO;
-		goto done;
-	}
-
-	/* restore original data */
-	ret = rtl9210_write(dev, max_lba, block_size, block_address, num_blocks, original);
-	if (ret) goto done;
-	
-	/* verify original data */
-	ret = rtl9210_read(dev, max_lba, block_size, block_address, num_blocks, data);
-	if (ret) goto done;
-	
-	if (memcmp(data, original, len)) {
-		printk(KERN_ERR "rtl9210: failed to restore original data\n");	
-		ret = -EIO;
-		goto done;
-	}
-
-	printk(KERN_INFO "rtl9210: write test passed\n");
-	ret = 0;
-
-done:
-	kfree(original);
-	kfree(data);
-	kfree(expected);
-	return ret;
-}
-
 static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 {
 	struct rtl9210_dev *dev = shost_priv(shost);
@@ -519,10 +398,13 @@ static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 		scsi_done(cmd);
 		ret = 0;
 		break;
-	/*
 	case READ_10:			// 0x28
 		ret = rtl9210_scsi_read(dev, cmd);
+		cmd->result = (ret) ? DID_ERROR << 16 : DID_OK << 16;
+		scsi_done(cmd);
+		ret = 0;
 		break;
+	/*
 	case WRITE_10:			// 0x2a
 		ret = rtl9210_scsi_write(dev, cmd);
 		break;
