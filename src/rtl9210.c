@@ -81,6 +81,39 @@ static void rtl9210_finish_command(struct scsi_cmnd *cmd, int host_status)
 	scsi_done(cmd);
 }
 
+static void rtl9210_debug_log(struct scsi_cmnd *cmd)
+{
+	struct rtl9210_cmd_priv *priv = scsi_cmd_priv(cmd);
+
+	if (priv->cbw->CDB[0] == INQUIRY) {			// 0x12
+		if (!(cmd->cmnd[1] & 0x01)) {
+			printk(KERN_INFO "rtl9210: INQUIRY response received\n");
+			printk(KERN_INFO "rtl9210: vendor:   %.8s\n",  &((u8 *)priv->data_buf)[8]);
+			printk(KERN_INFO "rtl9210: product:  %.16s\n", &((u8 *)priv->data_buf)[16]);
+			printk(KERN_INFO "rtl9210: revision: %.4s\n",  &((u8 *)priv->data_buf)[32]);
+		} else {
+			printk(KERN_INFO "rtl9210: VPD page 0x%02x requested (len=%u)\n", 
+					cmd->cmnd[2], priv->len);
+		}
+	}
+	if (priv->cbw->CDB[0] == READ_CAPACITY) {	// 0x25
+		max_lba  = be32_to_cpu(*(__be32 *)&((u8 *)priv->data_buf)[0]);
+		blk_size = be32_to_cpu(*(__be32 *)&((u8 *)priv->data_buf)[4]);
+		
+		printk(KERN_INFO "rtl9210: max LBA=%u block size=%u\n", max_lba, blk_size);
+	}
+	if (priv->cbw->CDB[0] == READ_10) {			// 0x28
+		u32 block_address = be32_to_cpu(*(__be32 *)&priv->cbw->CDB[2]);
+    	u16 num_blocks	  = be16_to_cpu(*(__be16 *)&priv->cbw->CDB[7]);
+		
+		printk(KERN_INFO "rtl9210: %d blocks read at lba=%d\n", num_blocks, block_address);	
+		/*	uncomment to view bytes read
+		print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
+			16, 1, data_buf, num_blocks * blk_size, true);
+		*/
+	}
+}
+
 static void rtl9210_async_complete(struct urb *urb)
 {
 	struct scsi_cmnd *cmd = urb->context;
@@ -126,11 +159,7 @@ static void rtl9210_async_complete(struct urb *urb)
 			printk(KERN_ERR "rtl9210: CSW error/tag mismatch\n");
 			rtl9210_finish_command(cmd, DID_ERROR);
 		} else {
-			if (priv->cbw->CDB[0] == READ_CAPACITY && priv->data_buf) {
-				max_lba  = be32_to_cpu(*(__be32 *)&((u8 *)priv->data_buf)[0]);
-				blk_size = be32_to_cpu(*(__be32 *)&((u8 *)priv->data_buf)[4]);
-				printk(KERN_INFO "rtl9210: max LBA=%u block size=%u\n", max_lba, blk_size);
-			}
+			rtl9210_debug_log(cmd);
 			rtl9210_finish_command(cmd, DID_OK);
 		}	
 		return;
