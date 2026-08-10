@@ -31,7 +31,6 @@ struct rtl9210_dev {
 
 	struct completion urb_done;
 	int urb_status;
-
 };
 
 /* endpoint parsing function */
