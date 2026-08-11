@@ -96,20 +96,44 @@ static void rtl9210_debug_log(struct scsi_cmnd *cmd)
 					cmd->cmnd[2], priv->len);
 		}
 	}
+	if (priv->cbw->CDB[0] == MODE_SENSE) {		// 0x1a
+		if (priv->len >= 4) {
+			u8 *d = priv->data_buf;
+			u8 bdesc_len = d[3];
+			u8 *page = d + 4 + bdesc_len;
+			// print page code and write cache enable bit
+			if (priv->len >= 4 + bdesc_len + 3)
+				printk(KERN_INFO "rtl9210: MODE_SENSE page=0x%02x wce=%d\n",
+					page[0] & 0x3F, !!(page[2] & 0x04));
+		}	
+		
+		print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
+			16, 1, priv->data_buf, priv->len, true);
+	}
 	if (priv->cbw->CDB[0] == READ_CAPACITY) {	// 0x25
 		max_lba  = be32_to_cpu(*(__be32 *)&((u8 *)priv->data_buf)[0]);
 		blk_size = be32_to_cpu(*(__be32 *)&((u8 *)priv->data_buf)[4]);
 		
-		printk(KERN_INFO "rtl9210: max LBA=%u block size=%u\n", max_lba, blk_size);
+		printk(KERN_INFO "rtl9210: READ_CAPACITY max LBA=%u block size=%u\n", max_lba, blk_size);
 	}
 	if (priv->cbw->CDB[0] == READ_10) {			// 0x28
 		u32 block_address = be32_to_cpu(*(__be32 *)&priv->cbw->CDB[2]);
     	u16 num_blocks	  = be16_to_cpu(*(__be16 *)&priv->cbw->CDB[7]);
 		
-		printk(KERN_INFO "rtl9210: %d blocks read at lba=%d\n", num_blocks, block_address);	
+		printk(KERN_INFO "rtl9210: READ_10 %d blocks read at lba=%d\n", num_blocks, block_address);	
 		/*	uncomment to view bytes read
 		print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
-			16, 1, data_buf, num_blocks * blk_size, true);
+			16, 1, priv->data_buf, num_blocks * blk_size, true);
+		*/
+	}
+	if (priv->cbw->CDB[0] == WRITE_10) {		// 0x2a
+		u32 block_address = be32_to_cpu(*(__be32 *)&priv->cbw->CDB[2]);
+    	u16 num_blocks	  = be16_to_cpu(*(__be16 *)&priv->cbw->CDB[7]);
+		
+		printk(KERN_INFO "rtl9210: WRITE_10 %d blocks written at lba=%d\n", num_blocks, block_address);
+		/*	uncomment to view bytes written
+		print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
+			16, 1, priv->data_buf, num_blocks * blk_size, true);
 		*/
 	}
 }
@@ -241,6 +265,7 @@ static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 {
 	struct rtl9210_dev *dev = shost_priv(shost);
 	u8 opcode = cmd->cmnd[0];
+	u32 block_address, num_blocks;
 
 	if (cmd->device->id != 0 || cmd->device->lun != 0) {
 		cmd->result = DID_NO_CONNECT << 16;
@@ -253,11 +278,13 @@ static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 		break;
 	case INQUIRY:			// 0x12
 		break;
+	case MODE_SENSE:		// 0x1a
+		break;
 	case READ_CAPACITY:		// 0x25
 		break;
 	case READ_10:			// 0x28
-		u32 block_address = be32_to_cpu(*(__be32 *)&cmd->cmnd[2]);
-		u16 num_blocks 	  = be16_to_cpu(*(__be16 *)&cmd->cmnd[7]);
+		block_address = be32_to_cpu(*(__be32 *)&cmd->cmnd[2]);
+		num_blocks 	  = be16_to_cpu(*(__be16 *)&cmd->cmnd[7]);
 
 		if ((u64)block_address + num_blocks > max_lba + 1) {
 			printk(KERN_ERR "rtl9210: READ(10) out of range\n");
@@ -267,6 +294,15 @@ static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 		}
 		break;
 	case WRITE_10:			// 0x2a
+		block_address = be32_to_cpu(*(__be32 *)&cmd->cmnd[2]);
+		num_blocks 	  = be16_to_cpu(*(__be16 *)&cmd->cmnd[7]);
+
+		if ((u64)block_address + num_blocks > max_lba + 1) {
+			printk(KERN_ERR "rtl9210: WRITE(10) out of range\n");
+			cmd->result = DID_ERROR << 16;
+			scsi_done(cmd);
+			return 0;
+		}
 		break;
 	default:
 		printk(KERN_WARNING "rtl9210: unhandled opcode 0x%02x\n", opcode);
