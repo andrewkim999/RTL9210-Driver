@@ -84,57 +84,72 @@ static void rtl9210_finish_command(struct scsi_cmnd *cmd, int host_status)
 static void rtl9210_debug_log(struct scsi_cmnd *cmd)
 {
 	struct rtl9210_cmd_priv *priv = scsi_cmd_priv(cmd);
+	u8 opcode = priv->cbw->CDB[0];
 
-	if (priv->cbw->CDB[0] == INQUIRY) {			// 0x12
+	if (opcode == INQUIRY) {					// 0x12
 		if (!(cmd->cmnd[1] & 0x01)) {
-			printk(KERN_INFO "rtl9210: INQUIRY response received\n");
-			printk(KERN_INFO "rtl9210: vendor:   %.8s\n",  &((u8 *)priv->data_buf)[8]);
-			printk(KERN_INFO "rtl9210: product:  %.16s\n", &((u8 *)priv->data_buf)[16]);
-			printk(KERN_INFO "rtl9210: revision: %.4s\n",  &((u8 *)priv->data_buf)[32]);
+			printk(KERN_INFO "rtl9210: INQUIRY: response received\n");
+			printk(KERN_INFO "rtl9210: INQUIRY: vendor:   %.8s\n",  &((u8 *)priv->data_buf)[8]);
+			printk(KERN_INFO "rtl9210: INQUIRY: product:  %.16s\n", &((u8 *)priv->data_buf)[16]);
+			printk(KERN_INFO "rtl9210: INQUIRY: revision: %.4s\n",  &((u8 *)priv->data_buf)[32]);
 		} else {
-			printk(KERN_INFO "rtl9210: VPD page 0x%02x requested (len=%u)\n", 
+			printk(KERN_INFO "rtl9210: INQUIRY: VPD page 0x%02x requested (len=%u)\n", 
 					cmd->cmnd[2], priv->len);
 		}
-	}
-	if (priv->cbw->CDB[0] == MODE_SENSE) {		// 0x1a
+	} else if (opcode == MODE_SENSE) {			// 0x1a
 		if (priv->len >= 4) {
 			u8 *d = priv->data_buf;
 			u8 bdesc_len = d[3];
 			u8 *page = d + 4 + bdesc_len;
 			// print page code and write cache enable bit
 			if (priv->len >= 4 + bdesc_len + 3)
-				printk(KERN_INFO "rtl9210: MODE_SENSE page=0x%02x wce=%d\n",
+				printk(KERN_INFO "rtl9210: MODE_SENSE: page=0x%02x wce=%d\n",
 					page[0] & 0x3F, !!(page[2] & 0x04));
 		}	
-		
-		print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
+		/* uncomment to view page dump
+		print_hex_dump(KERN_INFO, "rtl9210: MODE_SENSE: ", DUMP_PREFIX_OFFSET,
 			16, 1, priv->data_buf, priv->len, true);
-	}
-	if (priv->cbw->CDB[0] == READ_CAPACITY) {	// 0x25
+		*/
+	} else if (opcode == READ_CAPACITY) {		// 0x25
 		max_lba  = be32_to_cpu(*(__be32 *)&((u8 *)priv->data_buf)[0]);
 		blk_size = be32_to_cpu(*(__be32 *)&((u8 *)priv->data_buf)[4]);
 		
-		printk(KERN_INFO "rtl9210: READ_CAPACITY max LBA=%u block size=%u\n", max_lba, blk_size);
-	}
-	if (priv->cbw->CDB[0] == READ_10) {			// 0x28
+		printk(KERN_INFO "rtl9210: READ_CAPACITY: max_lba=%u blk_size=%u\n", max_lba, blk_size);
+	} else if (opcode == READ_10) {				// 0x28
 		u32 block_address = be32_to_cpu(*(__be32 *)&priv->cbw->CDB[2]);
     	u16 num_blocks	  = be16_to_cpu(*(__be16 *)&priv->cbw->CDB[7]);
 		
-		printk(KERN_INFO "rtl9210: READ_10 %d blocks read at lba=%d\n", num_blocks, block_address);	
+		printk(KERN_INFO "rtl9210: READ_10: %d blocks read at lba=%d\n", num_blocks, block_address);	
 		/*	uncomment to view bytes read
-		print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
+		print_hex_dump(KERN_INFO, "rtl9210: READ_10: ", DUMP_PREFIX_OFFSET,
 			16, 1, priv->data_buf, num_blocks * blk_size, true);
 		*/
-	}
-	if (priv->cbw->CDB[0] == WRITE_10) {		// 0x2a
+	} else if (opcode == WRITE_10) {			// 0x2a
 		u32 block_address = be32_to_cpu(*(__be32 *)&priv->cbw->CDB[2]);
     	u16 num_blocks	  = be16_to_cpu(*(__be16 *)&priv->cbw->CDB[7]);
 		
-		printk(KERN_INFO "rtl9210: WRITE_10 %d blocks written at lba=%d\n", num_blocks, block_address);
+		printk(KERN_INFO "rtl9210: WRITE_10: %d blocks written at lba=%d\n", num_blocks, block_address);
 		/*	uncomment to view bytes written
-		print_hex_dump(KERN_INFO, "rtl9210: ", DUMP_PREFIX_OFFSET,
+		print_hex_dump(KERN_INFO, "rtl9210: WRITE_10: ", DUMP_PREFIX_OFFSET,
 			16, 1, priv->data_buf, num_blocks * blk_size, true);
 		*/
+	} else if (opcode == SYNCHRONIZE_CACHE) {	// 0x35
+		u32 block_address = be32_to_cpu(*(__be32 *)&priv->cbw->CDB[2]);
+    	u16 num_blocks	  = be16_to_cpu(*(__be16 *)&priv->cbw->CDB[7]);
+		printk(KERN_INFO "rtl9210: SYNCHRONIZE_CACHE: block_address=%d num_blocks=%d\n",
+				block_address, num_blocks);
+	} else if (opcode == REPORT_LUNS) {			// 0xa0
+		printk(KERN_INFO "rtl9210: REPORT_LUNS: select_report=0x%02x\n", cmd->cmnd[2]);
+		/* uncomment to view all LUNs
+		u64 lun_list_length = be32_to_cpu(*(__be32 *)&((u8 *)priv->data_buf)[0]);
+		print_hex_dump(KERN_INFO, "rtl9210: REPORT_LUNS: ", DUMP_PREFIX_OFFSET,
+			16, 1, priv->data_buf, 8 + lun_list_length, true);
+		*/
+	} else if (opcode == ATA_12) {				// 0xa1
+		printk(KERN_INFO "rtl9210: ATA_12: command=0x%02x\n", cmd->cmnd[14]);	
+	} else if (opcode == MAINTENANCE_IN) {		// 0xa3
+		u8 service_action = cmd->cmnd[1] & 0x1f;
+		printk(KERN_INFO "rtl9210: MAINTENANCE_IN service action=0x%02x\n", service_action);
 	}
 }
 
@@ -258,9 +273,9 @@ fail:
  * when the driver has finished with it. (you may call done on the
  * command before queuecommand returns, but in this case you	
  * *must* return 0 from queuecommand).
+ *
+ * source: linux kernel scsi_host.h 
  */
-/* source: linux kernel scsi_host.h */
-
 static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 {
 	struct rtl9210_dev *dev = shost_priv(shost);
@@ -303,6 +318,20 @@ static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 			scsi_done(cmd);
 			return 0;
 		}
+		break;
+	case SYNCHRONIZE_CACHE: // 0x35
+		break;
+	case REPORT_LUNS:		// 0xa0
+		break;
+	case ATA_12:			// 0xa1
+		break;
+	case MAINTENANCE_IN:	// 0xa3
+		/*
+		printk(KERN_INFO "rtl9210: MAINTENANCE_IN rejected (unsupported by device)\n");
+		cmd->result = DID_ERROR << 16;
+		scsi_done(cmd);
+		return 0;
+		*/
 		break;
 	default:
 		printk(KERN_WARNING "rtl9210: unhandled opcode 0x%02x\n", opcode);
@@ -408,8 +437,9 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
  	 *
  	 * Note that there is generally no need to clear the driver-data pointer even
  	 * if some drivers do so for historical or implementation-specific reasons.
- 	 */
-	/* source: linux kernel usb.h */
+ 	 *
+	 * source: linux kernel usb.h
+	 */
 	usb_set_intfdata(intf, dev);
 
 	ret = scsi_add_host(shost, &intf->dev);
@@ -459,8 +489,9 @@ static struct usb_driver rtl9210_driver = {
  * Helper macro for USB drivers which do not do anything special in module
  * init/exit. This eliminates a lot of boilerplate. Each module may only
  * use this macro once, and calling it replaces module_init() and module_exit()
+ *
+ * source: linux kernel usb.h 
  */
-/* source: linux kernel usb.h */
 module_usb_driver(rtl9210_driver);
 
 MODULE_LICENSE("GPL");
