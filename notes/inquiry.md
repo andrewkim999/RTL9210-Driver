@@ -2,7 +2,7 @@ The very first transfer to be sent will be the inquiry command. The inquiry comm
 
 Since we are using BOT to transfer data, we use the command block wrapper (bulk_cb_wrap) to request data and command status wrapper (bulk_cs_wrap) to receive status. These are structs provided under storage.h in the Linux kernel. With BOT, we send requests and receive data sequentially. The sequence goes like:
 
-`send CBW -> wait -> receive data -> wait -> receive CSW -> wait -> done`
+**send CBW -> wait -> receive data -> wait -> receive CSW -> wait -> done**
 
 Notice that there are delays that must happen between each steps due to the time taken to transfer. We must provide these delays through the use of the completion struct. Otherwise the driver will not wait for the transfer and move to the next step immediately.
 
