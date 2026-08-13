@@ -20,7 +20,7 @@ Read Operation
 ==============
 BOT
 ---
-* bulk-out URB -> EP 2 OUT (send inquiry command)
+* bulk-out URB -> EP 2 OUT (send read command)
 * bulk-in URB  <- EP 1 IN  (receive data)
 * bulk-in URB  <- EP 1 IN  (receive status)
 
