@@ -2,6 +2,7 @@
 #include <linux/usb.h>
 #include <linux/usb/uas.h>
 #include <linux/usb/storage.h>
+#include <linux/workqueue.h>
 
 #include <scsi/scsi_proto.h>
 #include <scsi/scsi_host.h>
@@ -28,6 +29,8 @@ struct rtl9210_dev {
 	
 	struct urb *bulk_in_urb;
 	struct urb *bulk_out_urb;
+
+	struct work_struct clear_halt_work;
 };
 
 enum rtl9210_phase { PHASE_CBW, PHASE_DATA, PHASE_CSW };
@@ -88,7 +91,6 @@ static void rtl9210_debug_log(struct scsi_cmnd *cmd)
 
 	if (opcode == INQUIRY) {					// 0x12
 		if (!(cmd->cmnd[1] & 0x01)) {
-			printk(KERN_INFO "rtl9210: INQUIRY: response received\n");
 			printk(KERN_INFO "rtl9210: INQUIRY: vendor:   %.8s\n",  &((u8 *)priv->data_buf)[8]);
 			printk(KERN_INFO "rtl9210: INQUIRY: product:  %.16s\n", &((u8 *)priv->data_buf)[16]);
 			printk(KERN_INFO "rtl9210: INQUIRY: revision: %.4s\n",  &((u8 *)priv->data_buf)[32]);
@@ -153,6 +155,14 @@ static void rtl9210_debug_log(struct scsi_cmnd *cmd)
 	}
 }
 
+static void rtl9210_clear_halt_work(struct work_struct *work)
+{
+	struct rtl9210_dev *dev = container_of(work, struct rtl9210_dev, clear_halt_work);
+	usb_clear_halt(dev->udev, usb_sndbulkpipe(dev->udev, 0x02));
+	usb_clear_halt(dev->udev, usb_rcvbulkpipe(dev->udev, 0x81));
+}
+
+/* atomic context completion handler */
 static void rtl9210_async_complete(struct urb *urb)
 {
 	struct scsi_cmnd *cmd = urb->context;
@@ -163,7 +173,14 @@ static void rtl9210_async_complete(struct urb *urb)
 	int len;
 
 	if (urb->status) {
-		printk(KERN_ERR "rtl9210: URB failed in phase %d: %d\n", priv->phase, urb->status);
+		printk(KERN_ERR "rtl9210: URB failed in phase %d (opcode=0x%02x): status=%d\n",
+			   priv->phase, priv->cbw->CDB[0], urb->status);
+		
+		if (urb->status == -EPIPE)
+			/* adds clear_halt_work to kernel-managed queue
+			 * safe to call from atomic context unlike usb_clear_halt */
+			schedule_work(&priv->dev->clear_halt_work);
+		
 		rtl9210_finish_command(cmd, DID_ERROR);
 		return;
 	}
@@ -194,8 +211,11 @@ static void rtl9210_async_complete(struct urb *urb)
 		pipe = usb_rcvbulkpipe(dev->udev, 0x81);
 		break;
 	case PHASE_CSW:
-		if (priv->cbw->Tag != priv->csw->Tag || priv->csw->Status != 0) {
+		if (priv->cbw->Tag != priv->csw->Tag) {
 			printk(KERN_ERR "rtl9210: CSW error/tag mismatch\n");
+			rtl9210_finish_command(cmd, DID_ERROR);
+		} else if (priv->csw->Status) {
+			printk(KERN_ERR "rtl9210: CSW status=0x%02x\n", urb->status);
 			rtl9210_finish_command(cmd, DID_ERROR);
 		} else {
 			rtl9210_debug_log(cmd);
@@ -326,13 +346,10 @@ static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 	case ATA_12:			// 0xa1
 		break;
 	case MAINTENANCE_IN:	// 0xa3
-		/*
 		printk(KERN_INFO "rtl9210: MAINTENANCE_IN rejected (unsupported by device)\n");
 		cmd->result = DID_ERROR << 16;
 		scsi_done(cmd);
 		return 0;
-		*/
-		break;
 	default:
 		printk(KERN_WARNING "rtl9210: unhandled opcode 0x%02x\n", opcode);
 		cmd->result = DID_OK << 16;
@@ -427,6 +444,9 @@ static int rtl9210_probe(struct usb_interface *intf, const struct usb_device_id 
 	
 	printk(KERN_INFO "rtl9210: URBs allocated\n");
 
+	/* when clear_halt_work is scheduled, call rtl9210_clear_halt_work */
+	INIT_WORK(&dev->clear_halt_work, rtl9210_clear_halt_work);
+	
 	/**
  	 * usb_set_intfdata() - associate driver-specific data with an interface
  	 * @intf: USB interface
