@@ -43,3 +43,7 @@ Kernel
 ------
 * Source: WSL2-Linux-Kernel on Github
 * Link:   https://github.com/microsoft/wsl2-linux-kernel
+
+SSD
+---
+* Filesystem: ext4
