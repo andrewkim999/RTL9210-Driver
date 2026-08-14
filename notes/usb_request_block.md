@@ -41,7 +41,7 @@ BOT
 UAS
 ---
 * command URB  -> EP 4 OUT (send write command)
-* data OUT URB -> EP 2 OUT (send the data)
-* status URB   <- EP 3 IN  (receive completion status)
+* data OUT URB -> EP 2 OUT (send data)
+* status URB   <- EP 3 IN  (receive status)
 
 We allocate the URBs using usb_alloc_urb() in probe(). These URBs are only freed upon reaching disconnect(). We then initialize the URBs using usb_fill_bulk_urb() in inquiry()/read()/write() which provides the usb device pointer, pipe, transfer buffer, desired transfer length, completion handler, and context. The URB is submitted through usb_submit_urb().
