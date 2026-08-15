@@ -1,4 +1,4 @@
-The next step is to connect the device through the SCSI layer.
+The next step is to register our driver to the SCSI subsystem. The SCSI subsystem consists of three layers: upper layer driver, lower layer driver, and the SCSI midlayer. The SCSI midlayer is responsible for receiving requests from the higher layer (eg. filesystem) and sending appropriate SCSI commands to the lower layer driver. Up to this point we have proven that our driver can execute basic SCSI commands through the probe() function, but now we want a way to receive commands from the SCSI midlayer as a lower layer driver. 
 
 Host vs Device
 --------------
