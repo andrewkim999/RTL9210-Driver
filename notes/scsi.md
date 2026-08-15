@@ -9,3 +9,5 @@ A SCSI device is the actual hardware discovered through the host. Each device is
 Code
 ----
 We configure our host settings through the `host_template`. We then initialize a new `struct Scsi_Host` through `scsi_host_alloc`, which prepares the instance but doesn't register it to the SCSI subsystem until `scsi_add_host` is called. After calling `scsi_add_host`, we call `scsi_scan_host` to discover all devices associated with the host. The SCSI midlayer will then call the function provided under the `.queuecommand` field in `host_template` to send SCSI commands. At `disconnect`, `scsi_remove_host` (unregisters host from SCSI subsystem) and `scsi_host_put` (frees host allocation) are added.
+
+I also noticed we can use the `.cmd_size` field to store per-command data. Although our driver currently executes 1 command at a time (`.can_queue = 1`), I moved the critical data to a separate `struct cmd_priv` in case I want to implement concurrent SCSI command executions in the future. Each command now has their own private bulk wraps and data buffers, which prevents race conditions with SCSI commands executing concurrently.
