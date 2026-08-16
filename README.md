@@ -3,7 +3,6 @@
 Inserting the Driver Module
 ---------------------------
 To insert the driver module, run the following commands (or simply run `./bind_rtl9210.sh`):
-
 ```
 sudo umount /dev/sde1 2>/dev/null  
 sudo rmmod rtl9210  
@@ -15,7 +14,6 @@ dmesg   # optional
 ```
 
 Also execute these commands to manually bind the driver and make sure the provided driver didn't take over:
-
 ```
 echo "2-1:1.0" | sudo tee /sys/bus/usb/drivers/usb-storage/unbind  
 echo "2-1:1.0" | sudo tee /sys/bus/usb/drivers/rtl9210/bind  
@@ -52,7 +50,6 @@ Allocating the Filesystem (ext4)
 --------------------------------
 We must allocate our storage device with a filesystem compatible with Linux. In my case, I went with ext4.  
 Run the following line to allocate the ext4 filesystem on your partition:
-
 ```
 sudo mkfs.ext4 /dev/sde1
 ```  
@@ -60,7 +57,6 @@ sudo mkfs.ext4 /dev/sde1
 Mount Test
 ----------
 Run the following commands to test mounting your partition:
-
 ```
 sudo mkdir -p /mnt/test         # create mount point  
 sudo mount /dev/sde1 /mnt/test  # mount partition  
@@ -70,7 +66,6 @@ ls -la /mnt/test                # list all files
 Basic Read/Write Test
 ---------------------
 The following commands should print "hello world" 3 times in total:
-
 ```
 echo "hello world" | sudo tee /mnt/test/hello.txt   # first hello world print  
 cat /mnt/test/hello.txt                             # second hello world print  
@@ -81,83 +76,85 @@ cat /mnt/test/hello.txt                             # third hello world print
 ```
 
 # Bot vs UAS
+The USB (Universal Serial Bus) requires a protocol to communicate with the kernel. We have two options: BOT (Bulk-Only Transport) and UASP (USB Attached SCSI).  
 
-The USB (Universal Serial Bus) requires a protocol to communicate with the kernel. We have two options: BOT (Bulk-Only Transport) and UASP (USB Attached SCSI).
+BOT (Bulk-Only Transport):  
+Host sends a command block wrapper (CBW), which is a BOT-specific envelope. The device then sends/receives the data and sends a command status wrapper (CSW) to report the status. BOT only needs 2 endpoints, IN and OUT, since it sends and receives commands, data, and statuses sequentially. The problem with this protocol is that it is very slow, because the host must wait until the device reports the status before sending the next command. This is due to BOT being developed a very long time ago (1990s), so it has limited performance. However, BOT is also more versatile and can be used by almost any device.
 
-BOT (Bulk-Only Transport)  
-Host sends a command block wrapper (CBW), which is a BOT-specific envelope. The device then sends/receives the data, and sends a command status wrapper (CSW) to report the status. BOT only needs 2 endpoints, IN and OUT, since it sends and receives commands, data, and statuses sequentially. The problem with this protocol is that it is very slow, because the host must wait until the device reports the status before sending the next command. This is due to BOT being developed a very long time ago (1990s), so it has limited performance. It is however, more versatile and can be used by almost any device.
+UAS (USB Attached SCSI):  
+UAS sends commands in parallel, unlike BOT. Up to 32 commands can be sent simultaneously. UAS uses 4 endpoints (command, data IN, data OUT, status) instead of 2 to send commands in parallel. While one command is being sent to the host, the host can be sending data for another command. This improves performance significantly if there are many different operations queued (eg. read after write after read). This feature is called streams, which is only compatible with USB 3.0 and up.
 
-UAS (USB Attached SCSI)  
-UAS sends commands in parallel, unlike BOT. Up to 32 commands can be sent simultaneously. How does it do this? It's due to UAS using 4 endpoints (command, data IN, data OUT, status) instead of 2. While one command is being sent to the host, the host can be sending data for another command. This improves performance significantly if there are many different operations queued (eg. read after write after read). This feature is called streams, which is only compatible with USB 3.0 and up.
-
-One thing to note is that we are using vhci_hcd to test our driver, which is a virtual USB controller provided by our WSL2. vhci_hcd does not support streams required by UAS, so in this case we choose to use BOT due to hardware limitations.
+I am using vhci_hcd to test our driver, which is a virtual USB controller provided by our WSL2. vhci_hcd does not support streams required by UAS, so in this case I chose to use BOT due to hardware limitations.
+```
+[   16.415425] usb 2-1: USB controller vhci_hcd.0 does not support streams, which are required by the UAS driver.
+[   16.415428] usb 2-1: Please try an other USB controller if you wish to use UAS.
+```
 
 # USB Request Block
-URB (USB Request Block) is the layer below the tranfer protocol. If BOT and UAS are the ways to organize a delivery truck system, URB is the container on the truck itself. URB contains all the necessary information to execute USB transactions, whether that is command, data IN and OUT, or status.
+URB (USB Request Block) is the layer below the transfer protocol. We can fill out URBs to contain all the necessary information to execute USB transactions, whether that is command, data IN, data OUT, or status.
 
 For every endpoint being used, we need an URB. For BOT we allocate 2 URBs to send and receive data sequentially. For UAS we allocate 3 URBs to send and receive data in parallel.
 
-Inquiry:
-BOT:
+INQUIRY:
 ```
-bulk-out URB -> EP 2 OUT (send inquiry command)
+BOT:
+bulk-out URB -> EP 2 OUT (send INQUIRY command)
 bulk-in URB  <- EP 1 IN  (receive data)
 bulk-in URB  <- EP 1 IN  (receive status)
-```
 
 UAS:
-```
-command URB -> EP 4 OUT (send inquiry command)
+command URB -> EP 4 OUT (send INQIURY command)
 data IN URB <- EP 1 IN  (receive data)
 status URB  <- EP 3 IN  (receive status)
 ```
 
-Read:
-BOT:
+READ:
 ```
-bulk-out URB -> EP 2 OUT (send read command)
+BOT:
+bulk-out URB -> EP 2 OUT (send READ command)
 bulk-in URB  <- EP 1 IN  (receive data)
 bulk-in URB  <- EP 1 IN  (receive status)
-```
 
-UAS
-```
-command URB -> EP 4 OUT (send read command)
+UAS:
+command URB -> EP 4 OUT (send READ command)
 data IN URB <- EP 1 IN  (receive data)
 status URB  <- EP 3 IN  (receive status)
 ```
 
-Write:
-BOT
+WRITE:
 ```
-bulk-out URB -> EP 2 OUT (send write command)
+BOT:
+bulk-out URB -> EP 2 OUT (send WRITE command)
 bulk-out URB -> EP 2 OUT (send data)
 bulk-in URB  <- EP 1 IN  (receive status)
-```
 
-UAS
-```
-command URB  -> EP 4 OUT (send write command)
+UAS:
+command URB  -> EP 4 OUT (send WRITE command)
 data OUT URB -> EP 2 OUT (send data)
 status URB   <- EP 3 IN  (receive status)
 ```
 
-We allocate the URBs using `usb_alloc_urb()` in `probe()`. These URBs are only freed upon reaching `disconnect()`. We then initialize the URBs using `usb_fill_bulk_urb()` in `inquiry()`/`read()`/`write()` which provides the USB device pointer, pipe, transfer buffer, desired transfer length, completion handler, and context. The URB is submitted through `usb_submit_urb()`.
+I allocated the URBs using `usb_alloc_urb()` in `probe()`. These URBs are only freed upon reaching `disconnect()`. I then initialized the URBs using `usb_fill_bulk_urb()` in `inquiry()`/`read()`/`write()` which provides the USB device pointer, pipe, transfer buffer, desired transfer length, completion handler, and context. The URB is submitted through `usb_submit_urb()`.
 
 # Inquiry
-The very first transfer to be sent will be the inquiry command. The inquiry command is an SCSI command that makes the device identify itself. Our inquiry data provides the vendor, product, and revision. Inquiry is the simplest possible read operation that we implement before implementing actual read/write commands.
+The very first transfer to be sent will be the INQUIRY command. INQUIRY is an SCSI command that makes the device identify itself. INQIURY fills out a data buffer with the vendor, product, and revision. INQIURY is the simplest possible read operation that we implement before implementing actual read/write commands. For now we will be implementing SCSI commands in individual functions, such as `inquiry()`, `read()`, `write()`, etc.
 
 Since we are using BOT to transfer data, we use the command block wrapper `struct bulk_cb_wrap` to request data and command status wrapper `struct bulk_cs_wrap` to receive status. These are structs provided under `storage.h` in the kernel. With BOT, we send requests and receive data sequentially. The sequence goes like:
-
 ```
 send CBW -> wait -> receive data -> wait -> receive CSW -> wait -> done
 ```
 
-Notice that there are delays that must happen between each steps due to the time taken to transfer. We must provide these delays through the use of the completion struct. Otherwise the driver will not wait for the transfer and move to the next step immediately.
+There are delays that must happen between each steps due to the time taken to transfer. I provided these delays through the use of `struct completion` and `wait_for_completion()`. If we don't provide delays, the driver will not wait for the transfer and move to the next step immediately.
 
-There are 2 threads running during this part of the inquiry code. Thread 1 runs the driver code, and thread 2 runs the USB interrupt handler. When thread 1 calls `usb_submit_urb()`, the USB host controller (thread 2) handles the transfer in the background using interrupts. We must stop the driver code from filling and submitting a new URB before the transfer completes for the previous URB. Thus we make thread 1 sleep until the transfer is finished. `wait_for_completion()` allows thread 1 to sleep until thread 2 finishes the transfer and calls `urb_complete()`. 
-
-Correction: thread 2 is not a regular thread, it's an interrupt context
+Once we are done implementing, we get the vendor, product, and revision from the data buffer:
+```
+[   27.044044] rtl9210: INQUIRY CBW sent
+[   27.482501] rtl9210: INQUIRY response received
+[   27.482516] rtl9210: vendor:   Realtek
+[   27.482522] rtl9210: product:  RTL9210 NVME
+[   27.482525] rtl9210: revision: 1.00
+[   27.485955] rtl9210: INQUIRY CSW received
+```
 
 # Read Capacity
 Before writing READ, we start with writing READ_CAPACITY. We need to know two things before issuing a correct read:
@@ -171,12 +168,12 @@ We can calculate the total capacity of the SSD in bytes by simply multiplying th
 capacity = (max LBA + 1) * (block size)
 ```
 
-In my case I used a 1 TB SSD, so we can double check if the capacity matches.
-
-After sending our READ CAPACITY(10), our response reads:  
+In my case I used a 1 TB SSD, so we can double check if the capacity matches. After sending our READ_CAPACITY_10, our response reads:  
 ```
-max LBA=1953525167, block size=512 bytes  
-capacity=1000204886016 bytes
+[   27.490778] rtl9210: READ CAPACITY(10) CBW sent
+[   27.494803] rtl9210: max LBA=1953525167, block size=512 bytes
+[   27.494819] rtl9210: capacity=1000204886016 bytes
+[   27.498020] rtl9210: READ CAPACITY(10) CSW received
 ```
 
 Which equates to:  
@@ -185,8 +182,168 @@ Which equates to:
 1000204886016/(1024^3) = 931.5 GB in binary
 ```
 
-# Remove Default Driver
-Once our driver is done running probe(), we run into a problem. The driver provided from WSL2 (usb-storage) takes over our driver. This can be seen from our dmesg:
+# Read/Write
+`read()` and `write()` are very similar to `read_capacity()`, the main difference being that we must fill out the block address under CDB bytes 2-5 and number of blocks under bytes 7-8. Once I was finished writing the functions, I tested it with `write_test()`. This function is called with the block address and number of blocks to write. It stores the original blocks at that address, fills my magic number `5a` ('Z' in ASCII) in those blocks, then restores the data.
+
+I made `read()` print the blocks read for testing purposes. When `write_test()` is called on block_address=1953519615 and num_blocks=1 we get:
+```
+[   27.500885] rtl9210: READ(10) CBW sent
+[   27.503592] rtl9210: READ(10) data received
+[   27.506262] rtl9210: READ(10) CSW received
+[   27.506273] rtl9210: 00000000: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506281] rtl9210: 00000010: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506285] rtl9210: 00000020: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506288] rtl9210: 00000030: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506291] rtl9210: 00000040: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506294] rtl9210: 00000050: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506296] rtl9210: 00000060: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506299] rtl9210: 00000070: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506301] rtl9210: 00000080: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506304] rtl9210: 00000090: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506307] rtl9210: 000000a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506310] rtl9210: 000000b0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506312] rtl9210: 000000c0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506315] rtl9210: 000000d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506317] rtl9210: 000000e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506320] rtl9210: 000000f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506322] rtl9210: 00000100: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506325] rtl9210: 00000110: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506328] rtl9210: 00000120: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506331] rtl9210: 00000130: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506333] rtl9210: 00000140: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506336] rtl9210: 00000150: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506338] rtl9210: 00000160: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506341] rtl9210: 00000170: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506343] rtl9210: 00000180: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506346] rtl9210: 00000190: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506349] rtl9210: 000001a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506352] rtl9210: 000001b0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506354] rtl9210: 000001c0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506356] rtl9210: 000001d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506358] rtl9210: 000001e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.506360] rtl9210: 000001f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.508192] rtl9210: WRITE(10) CBW sent
+[   27.510508] rtl9210: WRITE(10) data received
+[   27.512972] rtl9210: WRITE(10) CSW received
+[   27.514412] rtl9210: READ(10) CBW sent
+[   27.517428] rtl9210: READ(10) data received
+[   27.519319] rtl9210: READ(10) CSW received
+[   27.519324] rtl9210: 00000000: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519329] rtl9210: 00000010: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519332] rtl9210: 00000020: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519334] rtl9210: 00000030: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519336] rtl9210: 00000040: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519337] rtl9210: 00000050: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519339] rtl9210: 00000060: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519341] rtl9210: 00000070: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519343] rtl9210: 00000080: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519344] rtl9210: 00000090: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519346] rtl9210: 000000a0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519348] rtl9210: 000000b0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519349] rtl9210: 000000c0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519351] rtl9210: 000000d0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519353] rtl9210: 000000e0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519354] rtl9210: 000000f0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519356] rtl9210: 00000100: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519358] rtl9210: 00000110: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519359] rtl9210: 00000120: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519361] rtl9210: 00000130: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519363] rtl9210: 00000140: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519365] rtl9210: 00000150: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519366] rtl9210: 00000160: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519368] rtl9210: 00000170: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519370] rtl9210: 00000180: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519371] rtl9210: 00000190: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519373] rtl9210: 000001a0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519375] rtl9210: 000001b0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519376] rtl9210: 000001c0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519378] rtl9210: 000001d0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519380] rtl9210: 000001e0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.519381] rtl9210: 000001f0: 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a 5a  ZZZZZZZZZZZZZZZZ
+[   27.520486] rtl9210: WRITE(10) CBW sent
+[   27.521621] rtl9210: WRITE(10) data received
+[   27.522818] rtl9210: WRITE(10) CSW received
+[   27.523651] rtl9210: READ(10) CBW sent
+[   27.524461] rtl9210: READ(10) data received
+[   27.525172] rtl9210: READ(10) CSW received
+[   27.525177] rtl9210: 00000000: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525181] rtl9210: 00000010: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525183] rtl9210: 00000020: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525185] rtl9210: 00000030: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525186] rtl9210: 00000040: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525187] rtl9210: 00000050: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525189] rtl9210: 00000060: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525190] rtl9210: 00000070: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525191] rtl9210: 00000080: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525193] rtl9210: 00000090: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525194] rtl9210: 000000a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525195] rtl9210: 000000b0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525196] rtl9210: 000000c0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525198] rtl9210: 000000d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525199] rtl9210: 000000e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525200] rtl9210: 000000f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525201] rtl9210: 00000100: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525203] rtl9210: 00000110: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525204] rtl9210: 00000120: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525206] rtl9210: 00000130: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525207] rtl9210: 00000140: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525208] rtl9210: 00000150: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525210] rtl9210: 00000160: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525211] rtl9210: 00000170: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525212] rtl9210: 00000180: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525213] rtl9210: 00000190: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525215] rtl9210: 000001a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525216] rtl9210: 000001b0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525217] rtl9210: 000001c0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525219] rtl9210: 000001d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525220] rtl9210: 000001e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525221] rtl9210: 000001f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.525224] rtl9210: write test passed
+```
+which shows that block 1953519615 was stored, then filled with `5a`, then restored correctly.
+
+We can also read the file contents of the very first block (block 0), which is the boot sector:
+```
+[   27.526212] rtl9210: READ(10) CBW sent
+[   27.526946] rtl9210: READ(10) data received
+[   27.528011] rtl9210: READ(10) CSW received
+[   27.528016] rtl9210: 00000000: fa b8 00 10 8e d0 bc 00 b0 b8 00 00 8e d8 8e c0  ................
+[   27.528021] rtl9210: 00000010: fb be 00 7c bf 00 06 b9 00 02 f3 a4 ea 21 06 00  ...|.........!..
+[   27.528023] rtl9210: 00000020: 00 be be 07 38 04 75 0b 83 c6 10 81 fe fe 07 75  ....8.u........u
+[   27.528025] rtl9210: 00000030: f3 eb 16 b4 02 b0 01 bb 00 7c b2 80 8a 74 01 8b  .........|...t..
+[   27.528026] rtl9210: 00000040: 4c 02 cd 13 ea 00 7c 00 00 eb fe 00 00 00 00 00  L.....|.........
+[   27.528028] rtl9210: 00000050: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528029] rtl9210: 00000060: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528031] rtl9210: 00000070: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528032] rtl9210: 00000080: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528034] rtl9210: 00000090: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528035] rtl9210: 000000a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528036] rtl9210: 000000b0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528038] rtl9210: 000000c0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528039] rtl9210: 000000d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528040] rtl9210: 000000e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528042] rtl9210: 000000f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528043] rtl9210: 00000100: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528045] rtl9210: 00000110: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528046] rtl9210: 00000120: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528048] rtl9210: 00000130: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528049] rtl9210: 00000140: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528050] rtl9210: 00000150: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528052] rtl9210: 00000160: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528053] rtl9210: 00000170: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528054] rtl9210: 00000180: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528056] rtl9210: 00000190: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528057] rtl9210: 000001a0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528059] rtl9210: 000001b0: 00 00 00 00 00 00 00 00 51 8a ee 13 00 00 00 05  ........Q.......
+[   27.528060] rtl9210: 000001c0: 05 01 07 fe ff ff 00 40 00 00 00 18 70 74 00 00  .......@....pt..
+[   27.528062] rtl9210: 000001d0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528063] rtl9210: 000001e0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+[   27.528065] rtl9210: 000001f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 55 aa  ..............U.
+```
+which is marked by the boot signature `55 aa` at the last 2 bytes.
+
+# Removing usb-storage
+Once our driver was done running `probe()`, I ran into a problem. The driver provided from WSL2 (usb-storage) takes over our driver. This can be seen from `dmesg`:
 
 ```
 [ 4853.001115] usb-storage 2-1:1.0: USB Mass Storage device detected  
@@ -194,14 +351,13 @@ Once our driver is done running probe(), we run into a problem. The driver provi
 [ 4853.030856] usbcore: registered new interface driver usb-storage
 ```
 
-This explains why the device shows up in `/dev` even when our driver does not wire the device into the kernel's SCSI subsystem yet. The default driver takes over after our driver is done running, so we want to prevent this usb-storage from taking over.
+This explains why the device shows up in `/dev` even when our driver does not wire the device into the kernel's SCSI subsystem yet. The default driver `usb-storage` takes over after our driver is done running, so I want to prevent this driver from taking over.
 
-We blacklist usb-storage by adding this code under `/etc/modprobe.d/blacklist-rtl9210-usbstorage.conf`:
+I blacklisted `usb-storage` by adding this code under `/etc/modprobe.d/blacklist-rtl9210-usbstorage.conf`:
 
 ```
 options usb-storage quirks=0bda:9210:i
 ```
-
 where the `i` quirk flag tells `usb-storage` to ignore that specific `vendor:product ID`. Rebooting WSL2 from now on will make `usb-storage` ignore our device, so that only our driver can interact with it.
 
 # SCSI
