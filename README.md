@@ -1,82 +1,57 @@
-# Commands
+# Introduction
+This is a linux driver for the RTL9210 SSD reader developed by me for learning purposes. I used WSL2 on Ubuntu to develop and test the code. To connect the driver to the device, simply run the bash script `bind_rtl9210.sh` and you will see the status of the driver through the `rtl9210:` messages. If you don't want to clutter your terminal with the giant diagnostic messages, feel free to modify or remove the `dmesg` line in the bash script.
 
-Inserting the Driver Module
----------------------------
-To insert the driver module, run the following commands (or simply run `./bind_rtl9210.sh`):
-```
-sudo umount /dev/sde1 2>/dev/null  
-sudo rmmod rtl9210  
-echo "exit code: $?"  
-lsmod | grep rtl9210
-make clean && make
-sudo insmod src/rtl9210.ko  
-dmesg   # optional
-```
+Below is the hardware information. For the full length copy, check out `descriptors.txt` in `/docs`
 
-Also execute these commands to manually bind the driver and make sure the provided driver didn't take over:
-```
-echo "2-1:1.0" | sudo tee /sys/bus/usb/drivers/usb-storage/unbind  
-echo "2-1:1.0" | sudo tee /sys/bus/usb/drivers/rtl9210/bind  
-dmesg   # optional
-```
-
-Note: Execute these commands also when the driver code is modified/updated.
-
-Disk and Partition
+# Hardware
+Device Descriptor
 -----------------
-To view the list of SCSI devices, run `lsscsi`.  
-I got something along the lines of  
-```
-[0:0:0:0]    disk    Msft     Virtual Disk     1.0   /dev/sda  
-[0:0:0:1]    disk    Msft     Virtual Disk     1.0   /dev/sdb  
-[0:0:0:2]    disk    Msft     Virtual Disk     1.0   /dev/sdc  
-[0:0:0:3]    disk    Msft     Virtual Disk     1.0   /dev/sdd  
-[1:0:0:0]    disk    Realtek  RTL9210 NVME     1.00  /dev/sde
-```  
+* USB Type: 3.20
+* Vendor:   0x0bda Realtek Semiconductor Corp.
+* Product:  0x9210 RTL9210 M.2 NVME Adapter
 
-The 5th disk `/dev/sde` is the actual device plugged in.
+Interface Descriptor
+--------------------
+* Interface Class:    Mass Storage
+* Interface Subclass: SCSI
+* Interface Protocol: Bulk-Only
 
-Then, to view the partition level detain, run 'lsblk /dev/sde'.  
-I got something like  
-```
-NAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS  
-sde      8:64   0 931.5G  0 disk  
-└─sde1   8:65   0 931.5G  0 part
-```  
+Endpoint Descriptors (UAS Mode)
+-------------------------------
+* Data-in  (0x03) Endpoint Address: 0x81 EP 1 IN
+* Data-out (0x04) Endpoint Address: 0x02 EP 2 OUT
+* Status   (0x02) Endpoint Address: 0x83 EP 3 IN
+* Command  (0x01) Endpoint Address: 0x04 EP 4 OUT
 
-Where `sde1` represents the partition under the disk.
+Endpoint Descriptors (BOT Mode)
+-------------------------------
+* Bulk-in  (0x81) Endpoint Address: 0x81 EP 1 IN
+* Bulk-out (0x02) Endpoint Address: 0x02 EP 2 OUT
 
-Allocating the Filesystem (ext4)
---------------------------------
-We must allocate our storage device with a filesystem compatible with Linux. In my case, I went with ext4.  
-Run the following line to allocate the ext4 filesystem on your partition:
-```
-sudo mkfs.ext4 /dev/sde1
-```  
+# Software
+Linux Distribution
+------------------
+* Distributor ID: Ubuntu
+* Description:    Ubuntu 24.04.1 LTS
+* Release:        24.04
+* Codename:       noble
 
-Mount Test
-----------
-Run the following commands to test mounting your partition:
-```
-sudo mkdir -p /mnt/test         # create mount point  
-sudo mount /dev/sde1 /mnt/test  # mount partition  
-ls -la /mnt/test                # list all files
-```  
+Kernel
+------
+* Source: WSL2-Linux-Kernel on Github
+* Link:   https://github.com/microsoft/wsl2-linux-kernel
 
-Basic Read/Write Test
----------------------
-The following commands should print "hello world" 3 times in total:
-```
-echo "hello world" | sudo tee /mnt/test/hello.txt   # first hello world print  
-cat /mnt/test/hello.txt                             # second hello world print  
-sync  
-sudo umount /mnt/test  
-sudo mount /dev/sde1 /mnt/test  
-cat /mnt/test/hello.txt                             # third hello world print
-```
+SSD
+---
+* Filesystem: ext4
+
+# Initial Skeleton
+Initially, I added a `struct usb_driver` and assigned the `.name`, `.probe`, `.disconnect`, and `.id_table`. The `.name` is simply the name of the driver. `probe()` and `disconnect()` are both functions that are called when the driver is inserted/removed as a kernel module. So I created these functions, then assigned those to `.probe` and `.disconnect`. `.id_table` should be an array of vendor/product ID pairs my driver claims to support, so I also added a `struct usb_device_id` and assigned it. I then registered the driver using `module_usb_driver()` with `struct usb_driver` as the input.
+
+`probe()` takes a `struct usb_interface` and a `struct usb_device_id` as inputs. `struct usb_interface` is what the USB device driver talks to, and interfaces can be used to configure hardware settings like the USB communication protocol (BOT vs UAS). It is also used to get `struct usb_device` through `interface_to_usbdeb()`, where that `struct usb_device` is used for communications with endpoints later. `struct usb_device_id` tells us which entry in our `.id_table` matched, which is necessary when there are multiple vendor:product ID pairs but isn't needed in our case since we only have 1 pair.
 
 # Bot vs UAS
-The USB (Universal Serial Bus) requires a protocol to communicate with the kernel. We have two options: BOT (Bulk-Only Transport) and UASP (USB Attached SCSI).  
+The USB (Universal Serial Bus) requires a protocol to communicate with the kernel. We have two options: BOT (Bulk-Only Transport) and UAS (USB Attached SCSI).  
 
 BOT (Bulk-Only Transport):  
 Host sends a command block wrapper (CBW), which is a BOT-specific envelope. The device then sends/receives the data and sends a command status wrapper (CSW) to report the status. BOT only needs 2 endpoints, IN and OUT, since it sends and receives commands, data, and statuses sequentially. The problem with this protocol is that it is very slow, because the host must wait until the device reports the status before sending the next command. This is due to BOT being developed a very long time ago (1990s), so it has limited performance. However, BOT is also more versatile and can be used by almost any device.
@@ -88,6 +63,11 @@ I am using vhci_hcd to test our driver, which is a virtual USB controller provid
 ```
 [   16.415425] usb 2-1: USB controller vhci_hcd.0 does not support streams, which are required by the UAS driver.
 [   16.415428] usb 2-1: Please try an other USB controller if you wish to use UAS.
+```
+
+To use the BOT protocol, I needed to allocate URBs (USB Request block). I simply added 2 `struct urb`s in my per-device state, which are then allocated using `usb_alloc_urb()`. Those URBs are then submitted using `usb_submit_urb()` in the order of
+```
+command -> data -> status
 ```
 
 # USB Request Block
@@ -137,7 +117,7 @@ status URB   <- EP 3 IN  (receive status)
 I allocated the URBs using `usb_alloc_urb()` in `probe()`. These URBs are only freed upon reaching `disconnect()`. I then initialized the URBs using `usb_fill_bulk_urb()` in `inquiry()`/`read()`/`write()` which provides the USB device pointer, pipe, transfer buffer, desired transfer length, completion handler, and context. The URB is submitted through `usb_submit_urb()`.
 
 # Inquiry
-The very first transfer to be sent will be the INQUIRY command. INQUIRY is an SCSI command that makes the device identify itself. INQIURY fills out a data buffer with the vendor, product, and revision. INQIURY is the simplest possible read operation that we implement before implementing actual read/write commands. For now we will be implementing SCSI commands in individual functions, such as `inquiry()`, `read()`, `write()`, etc.
+The very first transfer to be sent will be the INQUIRY command. INQUIRY is an SCSI command that makes the device identify itself. INQIURY fills out a data buffer with the vendor, product, and revision. INQIURY is the simplest possible read operation that we implement before implementing actual read/write commands. For now I will be implementing SCSI commands in individual functions, such as `inquiry()`, `read()`, `write()`, etc.
 
 Since we are using BOT to transfer data, we use the command block wrapper `struct bulk_cb_wrap` to request data and command status wrapper `struct bulk_cs_wrap` to receive status. These are structs provided under `storage.h` in the kernel. With BOT, we send requests and receive data sequentially. The sequence goes like:
 ```
@@ -369,7 +349,7 @@ A SCSI host is responsible for transporting SCSI commands from the midlayer to t
 
 A SCSI device is the actual hardware discovered through the host. Each device is identified by SCSI addressing scheme [Host:Bus:Target:Lun], which can be seen from our `dmesg` and `lsscsi` as [1:0:0:0].
 
-We configure our host settings through the `struct scsi_host_template`. We then initialize a new `struct Scsi_Host` through `scsi_host_alloc`, which prepares the instance but doesn't register it to the SCSI subsystem until `scsi_add_host()` is called. After calling `scsi_add_host()`, we call `scsi_scan_host()` to discover all devices associated with the host. The SCSI midlayer will then call the function provided under the `.queuecommand` field in `struct scsi_host_template` to send SCSI commands. At `disconnect()`, `scsi_remove_host()` (unregisters host from SCSI subsystem) and `scsi_host_put()` (frees host allocation) are added.
+I configured our host settings through the `struct scsi_host_template`. I then initialized a new `struct Scsi_Host` through `scsi_host_alloc`, which prepares the instance but doesn't register it to the SCSI subsystem until `scsi_add_host()` is called. After calling `scsi_add_host()`, our driver calls `scsi_scan_host()` to discover all devices associated with the host. The SCSI midlayer will then call the function provided under the `.queuecommand` field in `struct scsi_host_template` to send SCSI commands. At `disconnect()`, `scsi_remove_host()` (unregisters host from SCSI subsystem) and `scsi_host_put()` (frees host allocation) are added.
 
 I also noticed we can use the `.cmd_size` field to store per-command data. Although our driver currently executes 1 command at a time (`.can_queue = 1`), I moved the critical data to a separate `struct cmd_priv` in case I want to implement concurrent SCSI command executions in the future. Each command now has their own private bulk wraps and data buffers, which prevents race conditions with SCSI commands executing concurrently.
 
@@ -402,3 +382,76 @@ The problem is that putting the current thread to sleep leads to an automatic co
 So, I changed the code so that all commands execute the same general-purpose functions `submit_async()` and `async_complete()`, which are non-blocking. `queuecommand()` calls `submit_async()`, then `submit_async()` fills out the `struct bulk_cs_wrap` and submits the URB. The `urb_complete()` is now replaced with the new `async_complete()`. All functions calling `usb_submit_urb()` return immediately, which is not an issue anymore because we can never reach the next `usb_submit_urb()` until the current URB submission is completed. When the URB submission is complete, the SCSI midlayer invokes a callback to `async_complete()`, which then submits the next URB or calls `scsi_done()`. So now we don't have to worry about multiple URB submissions, nor do we need to use `wait_for_completion()`. It does not put any threads to sleep, so the "RCU read-side critical section" error does not appear anymore when tested.
 
 I have also added a `struct work_struct` under the per-device state and a new `clear_halt_work()`. This function is called in the case where an URB failed (returned bad status) and clears the URBs through `usb_clear_halt()`. `usb_clear_halt()` is actually not safe to use in an atomic context, so we use `schedule_work()` to schedule the `clear_halt_work()` function call and let the next available `kworker` thread execute it. `kworker` threads are kernel threads that can run in atomic contexts. 
+
+# Commands
+Inserting the Driver Module
+---------------------------
+To insert the driver module, run the following commands (or simply run `./bind_rtl9210.sh`):
+```
+sudo umount /dev/sde1 2>/dev/null  
+sudo rmmod rtl9210  
+echo "exit code: $?"  
+lsmod | grep rtl9210
+make clean && make
+sudo insmod src/rtl9210.ko  
+dmesg   # optional
+```
+
+Also execute these commands to manually bind the driver and make sure the provided driver didn't take over:
+```
+echo "2-1:1.0" | sudo tee /sys/bus/usb/drivers/usb-storage/unbind  
+echo "2-1:1.0" | sudo tee /sys/bus/usb/drivers/rtl9210/bind  
+dmesg   # optional
+```
+Execute these commands also when the driver code is modified/updated.
+
+Disk and Partition
+------------------
+To view the list of SCSI devices, run `lsscsi`.  
+I got something along the lines of  
+```
+[0:0:0:0]    disk    Msft     Virtual Disk     1.0   /dev/sda  
+[0:0:0:1]    disk    Msft     Virtual Disk     1.0   /dev/sdb  
+[0:0:0:2]    disk    Msft     Virtual Disk     1.0   /dev/sdc  
+[0:0:0:3]    disk    Msft     Virtual Disk     1.0   /dev/sdd  
+[1:0:0:0]    disk    Realtek  RTL9210 NVME     1.00  /dev/sde
+```  
+The 5th disk `/dev/sde` is the actual device plugged in.
+
+Then, to view the partition level detain, run 'lsblk /dev/sde'.  
+I got something like  
+```
+NAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS  
+sde      8:64   0 931.5G  0 disk  
+└─sde1   8:65   0 931.5G  0 part
+```  
+Where `sde1` represents the partition under the disk.
+
+Allocating the Filesystem (ext4)
+--------------------------------
+We must allocate our storage device with a filesystem compatible with Linux. In my case, I went with ext4.  
+Run the following line to allocate the ext4 filesystem on your partition:
+```
+sudo mkfs.ext4 /dev/sde1
+```  
+
+Mount Test
+----------
+Run the following commands to test mounting your partition:
+```
+sudo mkdir -p /mnt/test         # create mount point  
+sudo mount /dev/sde1 /mnt/test  # mount partition  
+ls -la /mnt/test                # list all files
+```  
+
+Basic Read/Write Test
+---------------------
+The following commands should print "hello world" 3 times in total:
+```
+echo "hello world" | sudo tee /mnt/test/hello.txt   # first hello world print  
+cat /mnt/test/hello.txt                             # second hello world print  
+sync  
+sudo umount /mnt/test  
+sudo mount /dev/sde1 /mnt/test  
+cat /mnt/test/hello.txt                             # third hello world print
+```
