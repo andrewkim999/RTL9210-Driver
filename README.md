@@ -1,7 +1,7 @@
 # Introduction
 This is a linux driver for the RTL9210 SSD reader developed by me for learning purposes. I used WSL2 on Ubuntu to develop and test the code. To connect the driver to the device, simply run the bash script `bind_rtl9210.sh` and you will see the status of the driver through the `rtl9210:` messages. If you don't want to clutter your terminal with the giant diagnostic messages, feel free to modify or remove the `dmesg` line in the bash script.
 
-Below is the hardware information. For the full length copy, check out `descriptors.txt` in `/docs`
+Below is the hardware information. For the full length copy, check out `/docs/descriptors.txt`. The most recent version of the driver can be found at `/src/rtl9210.c`.
 
 # Hardware
 Device Descriptor
