@@ -48,9 +48,9 @@ SSD
 # Initial Skeleton
 Initially, I added a `struct usb_driver` and assigned the `.name`, `.probe`, `.disconnect`, and `.id_table`. The `.name` is simply the name of the driver. `probe()` and `disconnect()` are both functions that are called when the driver is inserted/removed as a kernel module. So I created these functions, then assigned those to `.probe` and `.disconnect`. `.id_table` should be an array of vendor/product ID pairs my driver claims to support, so I also added a `struct usb_device_id` and assigned it. I then registered the driver using `module_usb_driver()` with `struct usb_driver` as the input.
 
-`probe()` takes a `struct usb_interface` and a `struct usb_device_id` as inputs. `struct usb_interface` is what the USB device driver talks to, and interfaces can be used to configure hardware settings like the USB communication protocol (BOT vs UAS). It is also used to get `struct usb_device` through `interface_to_usbdeb()`, where that `struct usb_device` is used for communications with endpoints later. `struct usb_device_id` tells us which entry in our `.id_table` matched, which is necessary when there are multiple vendor:product ID pairs but isn't needed in our case since we only have 1 pair.
+`probe()` takes a `struct usb_interface` and a `struct usb_device_id` as inputs. `struct usb_interface` is what the USB device driver talks to, and interfaces can be used to configure hardware settings like the USB communication protocol (eg. BOT vs UAS). It is also used to get `struct usb_device` through `interface_to_usbdeb()`, where that `struct usb_device` is used for communications with endpoints later. `struct usb_device_id` tells us which entry in our `.id_table` matched, which is necessary when there are multiple vendor:product ID pairs but isn't needed in our case since we only have 1 pair.
 
-# Bot vs UAS
+# BOT vs UAS
 The USB (Universal Serial Bus) requires a protocol to communicate with the kernel. We have two options: BOT (Bulk-Only Transport) and UAS (USB Attached SCSI).  
 
 BOT (Bulk-Only Transport):  
