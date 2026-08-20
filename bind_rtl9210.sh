@@ -7,6 +7,6 @@ lsmod | grep rtl9210
 make clean && make
 sudo insmod src/rtl9210.ko
 
-echo "2-1:1.0" | sudo tee /sys/bus/usb/drivers/usb-storage/unbind
-echo "2-1:1.0" | sudo tee /sys/bus/usb/drivers/rtl9210/bind
-dmesg
+echo "3-4:1.0" | sudo tee /sys/bus/usb/drivers/usb-storage/unbind
+echo "3-4:1.0" | sudo tee /sys/bus/usb/drivers/rtl9210/bind
+sudo dmesg -w

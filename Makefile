@@ -1,4 +1,4 @@
-KDIR := /home/andrewkim999/test/wsl2-kernel
+KDIR := /lib/modules/$(shell uname -r)/build
 
 obj-m += src/rtl9210.o
 

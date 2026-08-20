@@ -296,7 +296,7 @@ fail:
  *
  * source: linux kernel scsi_host.h 
  */
-static int rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
+static enum scsi_qc_status rtl9210_queuecommand(struct Scsi_Host *shost, struct scsi_cmnd *cmd)
 {
 	struct rtl9210_dev *dev = shost_priv(shost);
 	u8 opcode = cmd->cmnd[0];
