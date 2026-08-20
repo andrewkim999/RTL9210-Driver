@@ -1,5 +1,5 @@
 # Introduction
-This is a Linux driver for the RTL9210 SSD reader developed by me for learning purposes. It uses the BOT protocol, connects to the SCSI middle layer as a lower layer driver, and supports all SCSI commands through asynchronous/non-blocking execution. I used WSL2 on Ubuntu at first to develop and test the code, then verified that the driver works on Arch Linux as well. 
+This is a Linux driver for the RTL9210 SSD reader developed by me for learning purposes. It uses the BOT protocol, connects to the SCSI middle layer as a lower layer driver, and supports all SCSI commands (that the hardware can support) through asynchronous/non-blocking execution. I used WSL2 on Ubuntu at first to develop and test the code, then verified that the driver works on Arch Linux as well. 
 
 Below is the information of the hardware and software I used for testing. The full length copy of the endpoint descriptors are located at `/docs/descriptors.txt`. The most recent version of the driver can be found at `/src/rtl9210.c`.
 
@@ -300,6 +300,11 @@ We can also read the file contents of the very first block (block 0), which is t
 [   27.528065] rtl9210: 000001f0: 00 00 00 00 00 00 00 00 00 00 00 00 00 00 55 aa  ..............U.
 ```
 which is marked by the boot signature `55 aa` at the last 2 bytes.
+
+# Opcodes
+The SCSI commands that are commonly sent by the device include `TEST_UNIT_READY`, `INQUIRY`, `MODE_SENSE`, `READ_CAPACITY`, `READ_10`, `WRITE_10`, `SYNCHRONIZE_CACHE`, `REPORT_LUNS`, and `ATA12`. These are the only commands that my `queuecommand` recognizes right now, although I can research and add more supported commands if necessary.  
+
+The commands that are not supported by the hardware (that I found out so far) include `MODE_SENSE_10` and `MAINTENANCE_IN`. When URBs are sent for these commands, instead of returning properly it stalls the endpoint with a `-EPIPE` status. So I had to make `queuecommand` flag `DID_ERROR`, signal `scsi_done()`, and return right away when given these commands. 
 
 # SCSI
 The next step is to register our driver to the SCSI subsystem. The SCSI subsystem consists of three layers: upper layer driver, lower layer driver, and the SCSI midlayer. The SCSI midlayer is responsible for receiving requests from the higher layer (eg. filesystem) and sending appropriate SCSI commands to the lower layer driver. Up to this point we have proven that our driver can execute basic SCSI commands through `probe()`, but now we want a way to receive commands from the SCSI midlayer as a lower layer driver.
