@@ -1,49 +1,28 @@
 # Introduction
-This is a linux driver for the RTL9210 SSD reader developed by me for learning purposes. I used WSL2 on Ubuntu to develop and test the code. To connect the driver to the device, simply run the bash script `bind_rtl9210.sh` and you will see the status of the driver through the `rtl9210:` messages. If you don't want to clutter your terminal with the giant diagnostic messages, feel free to modify or remove the `dmesg` line in the bash script.
+This is a Linux driver for the RTL9210 SSD reader developed by me for learning purposes. It uses the BOT protocol, connects to the SCSI middle layer as a lower layer driver, and supports all SCSI commands through asynchronous/non-blocking execution. I used WSL2 on Ubuntu at first to develop and test the code, then verified that the driver works on Arch Linux as well. 
 
-Below is the hardware information. For the full length copy, check out `/docs/descriptors.txt`. The most recent version of the driver can be found at `/src/rtl9210.c`.
+Below is the information of the hardware and software I used for testing. The full length copy of the endpoint descriptors are located at `/docs/descriptors.txt`. The most recent version of the driver can be found at `/src/rtl9210.c`.
 
-# Hardware
-Device Descriptor
------------------
-* USB Type: 3.20
+RTL9210 SSD Reader
+------------------
 * Vendor:   0x0bda Realtek Semiconductor Corp.
 * Product:  0x9210 RTL9210 M.2 NVME Adapter
 
-Interface Descriptor
---------------------
+SSD
+---
+* WD_Black SN7100 1TB NVMe SSD
+* Filesystems used to test: ext4, extfat  
+
+Linux Distributions Tested on
+-----------------------------
+* Ubuntu 24.04.1 LTS (Kernel Version: 6.8)  
+* Arch Linux 2026.08.01 (Kernel Version: 7.1.5)  
+
+Driver Interface
+----------------
 * Interface Class:    Mass Storage
 * Interface Subclass: SCSI
 * Interface Protocol: Bulk-Only
-
-Endpoint Descriptors (UAS Mode)
--------------------------------
-* Data-in  (0x03) Endpoint Address: 0x81 EP 1 IN
-* Data-out (0x04) Endpoint Address: 0x02 EP 2 OUT
-* Status   (0x02) Endpoint Address: 0x83 EP 3 IN
-* Command  (0x01) Endpoint Address: 0x04 EP 4 OUT
-
-Endpoint Descriptors (BOT Mode)
--------------------------------
-* Bulk-in  (0x81) Endpoint Address: 0x81 EP 1 IN
-* Bulk-out (0x02) Endpoint Address: 0x02 EP 2 OUT
-
-# Software
-Linux Distribution
-------------------
-* Distributor ID: Ubuntu
-* Description:    Ubuntu 24.04.1 LTS
-* Release:        24.04
-* Codename:       noble
-
-Kernel
-------
-* Source: WSL2-Linux-Kernel on Github
-* Link:   https://github.com/microsoft/wsl2-linux-kernel
-
-SSD
----
-* Filesystem: ext4
 
 # Initial Skeleton
 Initially, I added a `struct usb_driver` and assigned the `.name`, `.probe`, `.disconnect`, and `.id_table`. The `.name` is simply the name of the driver. `probe()` and `disconnect()` are both functions that are called when the driver is inserted/removed as a kernel module. So I created these functions, then assigned those to `.probe` and `.disconnect`. `.id_table` should be an array of vendor/product ID pairs my driver claims to support, so I also added a `struct usb_device_id` and assigned it. I then registered the driver using `module_usb_driver()` with `struct usb_driver` as the input.
@@ -59,7 +38,7 @@ Host sends a command block wrapper (CBW), which is a BOT-specific envelope. The 
 UAS (USB Attached SCSI):  
 UAS sends commands in parallel, unlike BOT. Up to 32 commands can be sent simultaneously. UAS uses 4 endpoints (command, data IN, data OUT, status) instead of 2 to send commands in parallel. While one command is being sent to the host, the host can be sending data for another command. This improves performance significantly if there are many different operations queued (eg. read after write after read). This feature is called streams, which is only compatible with USB 3.0 and up.
 
-I am using vhci_hcd to test our driver, which is a virtual USB controller provided by our WSL2. vhci_hcd does not support streams required by UAS, so in this case I chose to use BOT due to hardware limitations.
+I was using vhci_hcd to test our driver, which is a virtual USB controller provided by WSL2. vhci_hcd does not support streams required by UAS, so in this case I chose to use BOT due to hardware limitations.
 ```
 [   16.415425] usb 2-1: USB controller vhci_hcd.0 does not support streams, which are required by the UAS driver.
 [   16.415428] usb 2-1: Please try an other USB controller if you wish to use UAS.
@@ -322,24 +301,6 @@ We can also read the file contents of the very first block (block 0), which is t
 ```
 which is marked by the boot signature `55 aa` at the last 2 bytes.
 
-# Removing usb-storage
-Once our driver was done running `probe()`, I ran into a problem. The driver provided from WSL2 (usb-storage) takes over our driver. This can be seen from `dmesg`:
-
-```
-[ 4853.001115] usb-storage 2-1:1.0: USB Mass Storage device detected  
-[ 4853.001868] usb-storage 2-1:1.0: device ignored  
-[ 4853.030856] usbcore: registered new interface driver usb-storage
-```
-
-This explains why the device shows up in `/dev` even when our driver does not wire the device into the kernel's SCSI subsystem yet. The default driver `usb-storage` takes over after our driver is done running, so I want to prevent this driver from taking over.
-
-I blacklisted `usb-storage` by adding this code under `/etc/modprobe.d/blacklist-rtl9210-usbstorage.conf`:
-
-```
-options usb-storage quirks=0bda:9210:i
-```
-where the `i` quirk flag tells `usb-storage` to ignore that specific `vendor:product ID`. Rebooting WSL2 from now on will make `usb-storage` ignore our device, so that only our driver can interact with it.
-
 # SCSI
 The next step is to register our driver to the SCSI subsystem. The SCSI subsystem consists of three layers: upper layer driver, lower layer driver, and the SCSI midlayer. The SCSI midlayer is responsible for receiving requests from the higher layer (eg. filesystem) and sending appropriate SCSI commands to the lower layer driver. Up to this point we have proven that our driver can execute basic SCSI commands through `probe()`, but now we want a way to receive commands from the SCSI midlayer as a lower layer driver.
 
@@ -384,6 +345,22 @@ So, I changed the code so that all commands execute the same general-purpose fun
 I have also added a `struct work_struct` under the per-device state and a new `clear_halt_work()`. This function is called in the case where an URB failed (returned bad status) and clears the URBs through `usb_clear_halt()`. `usb_clear_halt()` is actually not safe to use in an atomic context, so we use `schedule_work()` to schedule the `clear_halt_work()` function call and let the next available `kworker` thread execute it. `kworker` threads are kernel threads that can run in atomic contexts. 
 
 # Commands
+Identifying the Bus-Port
+------------------------
+After plugging in the device, run `lsusb` to find the device. We are looking for something that looks like `Bus 003 Device 009: ID 0bda:9210 Realtek Semiconductor Corp. RTL9210 M.2 NVME Adapter`, where the device ID is `0bda:9210`. Then, run this block of code to find the bus-port prefix:
+```
+for d in /sys/bus/usb/devices/*/idVendor; do
+  dir=$(dirname "$d")
+  echo "$dir: $(cat "$d" 2>/dev/null):$(cat "$dir/idProduct" 2>/dev/null)"
+done | grep -i 0bda:9210
+```
+In my case, I get `3-4`. The interface we want to bind/unbind has the suffix `1.0`, so the bus-port becomes `3-4:1.0`. Then replace my `3-4:1.0` bus-ports with yours in the last 2 echo commands in `bind_rtl9210.sh`:
+```
+echo "3-4:1.0" | sudo tee /sys/bus/usb/drivers/usb-storage/unbind
+echo "3-4:1.0" | sudo tee /sys/bus/usb/drivers/rtl9210/bind
+```
+Now we can run the bash script `bind_rtl9210.sh` to insert the driver module. You will see the status of the driver through the `rtl9210:` messages. If you don't want to clutter your terminal with the giant diagnostic messages, feel free to modify or remove the `sudo dmesg -w` line in the bash script.
+
 Inserting the Driver Module
 ---------------------------
 To insert the driver module, run the following commands (or simply run `./bind_rtl9210.sh`):
@@ -394,15 +371,15 @@ echo "exit code: $?"
 lsmod | grep rtl9210
 make clean && make
 sudo insmod src/rtl9210.ko  
-dmesg   # optional
 ```
 
 Also execute these commands to manually bind the driver and make sure the provided driver didn't take over:
 ```
 echo "2-1:1.0" | sudo tee /sys/bus/usb/drivers/usb-storage/unbind  
 echo "2-1:1.0" | sudo tee /sys/bus/usb/drivers/rtl9210/bind  
-dmesg   # optional
+sudo dmesg -w   # optional
 ```
+Make sure to replace `2-1:1.0` with your system's bus-port.  
 Execute these commands also when the driver code is modified/updated.
 
 Disk and Partition
@@ -410,30 +387,43 @@ Disk and Partition
 To view the list of SCSI devices, run `lsscsi`.  
 I got something along the lines of  
 ```
+WSL2
 [0:0:0:0]    disk    Msft     Virtual Disk     1.0   /dev/sda  
 [0:0:0:1]    disk    Msft     Virtual Disk     1.0   /dev/sdb  
 [0:0:0:2]    disk    Msft     Virtual Disk     1.0   /dev/sdc  
 [0:0:0:3]    disk    Msft     Virtual Disk     1.0   /dev/sdd  
 [1:0:0:0]    disk    Realtek  RTL9210 NVME     1.00  /dev/sde
-```  
-The 5th disk `/dev/sde` is the actual device plugged in.
 
-Then, to view the partition level detain, run 'lsblk /dev/sde'.  
+Arch Linux
+[0:0:0:0]    disk    Realtek  RTL9210 NVME     1.00  /dev/sda 
+[N:0:6:1]    disk    SAMSUNG MZVL21T0HCLR-00B00__1              /dev/nvme0n1
+```  
+The disk `/dev/sde` (or `/dev/sda` in Arch) is the actual device plugged in.
+
+Then, to view the partition level detain, run `lsblk /dev/sdX`, replacing `sdX` with your disk number (eg. `lsblk /dev/sde`).  
 I got something like  
 ```
+WSL2
 NAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS  
 sde      8:64   0 931.5G  0 disk  
 └─sde1   8:65   0 931.5G  0 part
-```  
-Where `sde1` represents the partition under the disk.
 
-Allocating the Filesystem (ext4)
---------------------------------
+Arch Linux
+NAME   MAJ:MIN RM   SIZE RO TYPE MOUNTPOINTS
+sda      8:0    0 931.5G  0 disk 
+└─sda1   8:1    0 931.5G  0 part /run/media/handyk/ex_ssd
+```  
+Where `sde1` and `sda1` represents the partition under the disk.
+
+Allocating the Filesystem
+-------------------------
 We must allocate our storage device with a filesystem compatible with Linux. In my case, I went with ext4.  
 Run the following line to allocate the ext4 filesystem on your partition:
 ```
-sudo mkfs.ext4 /dev/sde1
-```  
+sudo mkfs.ext4 /dev/sdX1  # sdX1 replaced with your partition
+```
+
+I also installed `exfat` on my SSD through the windows disk manager, which works fine with our driver when tested.
 
 Mount Test
 ----------
@@ -452,6 +442,6 @@ echo "hello world" | sudo tee /mnt/test/hello.txt   # first hello world print
 cat /mnt/test/hello.txt                             # second hello world print  
 sync  
 sudo umount /mnt/test  
-sudo mount /dev/sde1 /mnt/test  
+sudo mount /dev/sdX1 /mnt/test                      # sdX1 replaced with your partition  
 cat /mnt/test/hello.txt                             # third hello world print
 ```
